@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "vdsabev.omadough",
+  "name": "OmàDough",
+  "version": "0.1.0",
+  "author": "vdsabev",
+  "description": "Grow a sourdough starter in your Omarchy bar. Feed it daily, bake bread when it's ready.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OmàDough",
+    "description": "A sourdough starter that lives in your bar. Click to check on it and feed it.",
+    "category": "Fun",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
