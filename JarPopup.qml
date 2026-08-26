@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
+import "DoughState.js" as DoughState
 
 PanelWindow {
   id: root
@@ -17,14 +18,13 @@ PanelWindow {
 
   // State passed in from BarWidget
   property var doughState: ({})
+  property int clock: 0
   property string statusMsg: ""
   property string aliveMsg: ""
-  property string streakMsg: ""
   property bool feedable: false
   property bool bakeable: false
   property bool startable: false
   property bool dead: false
-  property bool inWindow: false
 
   signal closeRequested()
   signal feedRequested()
@@ -183,8 +183,8 @@ PanelWindow {
           width: 64
           height: 80
           volume: root.doughState.volume || 0
-          bubbles: root.doughState.bubbles || 0
-          darkness: root.doughState.darkness || 0
+          bubbles: { root.clock; return DoughState.displayBubbles(root.doughState) }
+          darkness: { root.clock; return DoughState.displayDarkness(root.doughState) }
           baked: root.doughState.baked || false
           doughColor: Color.accent
         }
@@ -204,16 +204,6 @@ PanelWindow {
           horizontalAlignment: Text.AlignHCenter
           text: root.aliveMsg
           visible: root.aliveMsg.length > 0
-          color: Qt.darker(Color.foreground, 1.5)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-        }
-
-        Text {
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          text: root.streakMsg
-          visible: root.streakMsg.length > 0
           color: Qt.darker(Color.foreground, 1.5)
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
@@ -271,7 +261,7 @@ PanelWindow {
             anchors.verticalCenter: parent.verticalCenter
 
             Rectangle {
-              width: parent.width * (root.doughState.bubbles || 0)
+              width: { root.clock; return parent.width * DoughState.displayBubbles(root.doughState) }
               height: parent.height
               radius: parent.radius
               color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.7)
@@ -283,7 +273,7 @@ PanelWindow {
         Row {
           anchors.horizontalCenter: parent.horizontalCenter
           spacing: Style.space(6)
-          visible: root.doughState.volume > 0 && !root.doughState.baked
+          visible: root.doughState.volume > 0
 
           Text {
             text: "Drk"
@@ -301,7 +291,7 @@ PanelWindow {
             anchors.verticalCenter: parent.verticalCenter
 
             Rectangle {
-              width: parent.width * (root.doughState.darkness || 0)
+              width: { root.clock; return parent.width * DoughState.displayDarkness(root.doughState) }
               height: parent.height
               radius: parent.radius
               color: Qt.rgba(0.6, 0.3, 0.1, 1)
@@ -344,13 +334,13 @@ PanelWindow {
           height: 36
           radius: Style.cornerRadius
           color: root.feedable ? Color.accent : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
-          visible: !root.startable && !root.bakeable && !root.dead && !root.doughState.baked
+          visible: DoughState.showFeed(root.doughState)
           opacity: root.feedable ? (feedMouse.containsMouse ? 0.85 : 1) : 0.5
 
           Text {
             id: feedRow
             anchors.centerIn: parent
-            text: root.inWindow ? (root.feedable ? "Feed Now" : "Already fed") : "Not in feed window"
+            text: DoughState.feedButtonText(root.doughState)
             color: root.feedable ? Color.background : Qt.darker(Color.foreground, 1.5)
             font.family: Style.font.family
             font.pixelSize: Style.font.body

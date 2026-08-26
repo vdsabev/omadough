@@ -66,6 +66,18 @@ Item {
       }
     }
 
+    Rectangle {
+      anchors.left: dough.left
+      anchors.right: dough.right
+      y: dough.y
+      height: root.volume > 0 && !root.baked
+        ? root.darkness * Math.max(2, root.jarH * 0.22)
+        : 0
+      visible: height > 0.5
+      color: Qt.rgba(0.28, 0.16, 0.08, 0.45 + root.darkness * 0.4)
+      radius: 1
+    }
+
     // Rim / lid
     Rectangle {
       anchors.horizontalCenter: parent.horizontalCenter

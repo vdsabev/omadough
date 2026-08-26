@@ -4,13 +4,13 @@ import { loadLib } from "./loadLib.mjs"
 
 const DS = loadLib("./DoughState.js", [
   "FEED_WINDOW_HOURS", "VOLUME_PER_FEED", "BUBBLES_PER_FEED",
-  "BUBBLES_PER_SKIP", "DARKNESS_PER_SKIP", "DARKNESS_RECOVER",
-  "DARKNESS_DEAD", "STREAK_WINDOW_DAYS", "STREAK_REQUIRED",
+  "DARKNESS_DEAD",
   "defaultState", "parseState", "clamp", "todayKey", "pad",
   "daysSince", "hoursSince", "inFeedWindow", "fedToday",
-  "canFeed", "canStart", "canBake", "recentStreak",
+  "canFeed", "canStart", "canBake", "showFeed", "feedButtonText",
   "feed", "startJar", "bake", "advanceDay", "isDead",
-  "aliveText", "streakText", "statusText", "doughColorComponents"
+  "aliveText", "statusText", "doughColorComponents",
+  "health", "displayBubbles", "displayDarkness", "persistFields"
 ])
 
 const DAY = 86400000
@@ -20,24 +20,31 @@ function makeState(overrides = {}) {
   return Object.assign(DS.defaultState(), overrides)
 }
 
-function feedDays(...daysAgo) {
-  const now = Date.now()
-  return daysAgo.map(d => new Date(now - d * DAY).toISOString().slice(0, 10))
+function daysAgoIso(n) {
+  return new Date(Date.now() - n * DAY).toISOString()
 }
 
-// ── Constants ──────────────────────────────────────────────
+function bakableState(overrides = {}) {
+  return makeState(Object.assign({
+    volume: 0.5,
+    bubbles: 0.5,
+    darkness: 0.5,
+    created: daysAgoIso(7),
+    lastFed: new Date().toISOString(),
+    loaves: []
+  }, overrides))
+}
 
-test("constants match documented values", () => {
-  assert.equal(DS.FEED_WINDOW_HOURS, 2)
-  assert.equal(DS.VOLUME_PER_FEED, 0.12)
-  assert.equal(DS.BUBBLES_PER_FEED, 0.15)
-  assert.equal(DS.BUBBLES_PER_SKIP, 0.08)
-  assert.equal(DS.DARKNESS_PER_SKIP, 0.04)
-  assert.equal(DS.DARKNESS_RECOVER, 0.06)
-  assert.equal(DS.DARKNESS_DEAD, 1.0)
-  assert.equal(DS.STREAK_WINDOW_DAYS, 7)
-  assert.equal(DS.STREAK_REQUIRED, 4)
-})
+function feedWindowOffset(offsetMinutes) {
+  const now = new Date()
+  let m = now.getHours() * 60 + now.getMinutes() - offsetMinutes
+  m = ((m % 1440) + 1440) % 1440
+  return { feedWindowMinutes: m, feedWindowHour: Math.floor(m / 60) }
+}
+
+function almostEqual(actual, expected, msg) {
+  assert.ok(Math.abs(actual - expected) < 1e-10, msg || `${actual} !== ${expected}`)
+}
 
 // ── clamp ──────────────────────────────────────────────────
 
@@ -95,8 +102,6 @@ test("defaultState has empty jar values", () => {
   assert.equal(s.baked, false)
   assert.equal(s.lastFed, null)
   assert.ok(s.created)
-  assert.ok(Array.isArray(s.feedDays))
-  assert.equal(s.feedDays.length, 0)
 })
 
 // ── parseState ─────────────────────────────────────────────
@@ -106,15 +111,18 @@ test("parseState round-trips valid JSON", () => {
     created: "2025-01-15T10:00:00.000Z",
     lastFed: "2025-01-16T08:00:00.000Z",
     volume: 0.5, bubbles: 0.6, darkness: 0.1,
-    baked: false, feedWindowHour: 8, feedDays: ["2025-01-16"]
+    baked: false, feedWindowHour: 8, feedWindowMinutes: 510,
+    loaves: [{ bakedAt: "2025-01-20T08:00:00.000Z", quality: 0.84 }]
   })
   const s = DS.parseState(input)
   assert.equal(s.volume, 0.5)
   assert.equal(s.bubbles, 0.6)
-  assert.equal(s.darkness, 0.1)
+  assert.equal(s.darkness, 0.4)
   assert.equal(s.baked, false)
   assert.equal(s.feedWindowHour, 8)
-  assert.deepEqual(s.feedDays, ["2025-01-16"])
+  assert.equal(s.feedWindowMinutes, 510)
+  assert.equal(s.loaves.length, 1)
+  assert.equal(s.loaves[0].quality, 0.84)
 })
 
 test("parseState falls back to defaults on bad input", () => {
@@ -141,39 +149,64 @@ test("parseState clamps out-of-range values", () => {
 test("parseState coerces non-numeric fields", () => {
   const s = DS.parseState(JSON.stringify({ volume: "abc", baked: "yes" }))
   assert.equal(s.volume, 0)
-  assert.equal(s.baked, true)
+  assert.equal(s.baked, false)
 })
 
-test("parseState handles missing feedDays", () => {
-  const s = DS.parseState(JSON.stringify({}))
-  assert.deepEqual(s.feedDays, [])
+test("parseState drops leftover feedDays", () => {
+  const s = DS.parseState(JSON.stringify({ feedDays: ["2025-01-16"] }))
+  assert.equal(s.feedDays, undefined)
+})
+
+test("parseState treats a legacy darkness death as dead even if bubbles remain", () => {
+  const s = DS.parseState(JSON.stringify({
+    volume: 0.5, bubbles: 0.6, darkness: 1,
+    lastFed: new Date().toISOString(),
+    created: daysAgoIso(10)
+  }))
+  assert.equal(s.bubbles, 0)
+  assert.equal(s.darkness, 1)
+  assert.equal(DS.isDead(s), true)
+})
+
+test("persistFields omits baked", () => {
+  const s = makeState({ volume: 0.5, bubbles: 0.4, baked: true, loaves: [] })
+  const p = DS.persistFields(s)
+  assert.equal("baked" in p, false)
+  assert.equal(p.volume, 0.5)
+  assert.equal(p.bubbles, 0.4)
+})
+
+test("parseState treats a legacy baked endgame as dead", () => {
+  const s = DS.parseState(JSON.stringify({
+    volume: 0.5, bubbles: 0.8, darkness: 0.2, baked: true,
+    lastFed: new Date().toISOString(),
+    created: daysAgoIso(10)
+  }))
+  assert.equal(s.bubbles, 0)
+  assert.equal(s.baked, false)
+  assert.equal(DS.isDead(s), true)
 })
 
 // ── inFeedWindow ───────────────────────────────────────────
 
-test("inFeedWindow returns true when current hour matches feedWindowHour", () => {
-  const now = new Date()
-  const s = makeState({ feedWindowHour: now.getHours(), baked: false })
+test("inFeedWindow returns true at the started minute", () => {
+  const s = makeState(Object.assign({ baked: false }, feedWindowOffset(0)))
   assert.equal(DS.inFeedWindow(s), true)
 })
 
-test("inFeedWindow returns false when outside the window", () => {
-  const now = new Date()
-  const s = makeState({ feedWindowHour: (now.getHours() + 5) % 24, baked: false })
+test("inFeedWindow returns false when more than 2 hours away", () => {
+  const s = makeState(Object.assign({ baked: false }, feedWindowOffset(121)))
   assert.equal(DS.inFeedWindow(s), false)
 })
 
 test("inFeedWindow wraps around midnight", () => {
-  const now = new Date()
-  const s = makeState({ feedWindowHour: (now.getHours() + 23) % 24, baked: false })
-  // 23 hours away → 1 hour the other way → within window
+  const s = makeState(Object.assign({ baked: false }, feedWindowOffset(60)))
   assert.equal(DS.inFeedWindow(s), true)
 })
 
-test("inFeedWindow returns false when baked", () => {
-  const now = new Date()
-  const s = makeState({ feedWindowHour: now.getHours(), baked: true })
-  assert.equal(DS.inFeedWindow(s), false)
+test("inFeedWindow ignores baked flag", () => {
+  const s = makeState(Object.assign({ baked: true }, feedWindowOffset(0)))
+  assert.equal(DS.inFeedWindow(s), true)
 })
 
 // ── fedToday ───────────────────────────────────────────────
@@ -208,14 +241,14 @@ test("canFeed is true when not fed today and volume > 0", () => {
   assert.equal(DS.canFeed(s), true)
 })
 
-test("canFeed is false when baked", () => {
-  const s = makeState({ volume: 0.5, baked: true })
-  assert.equal(DS.canFeed(s), false)
+test("canFeed ignores baked flag", () => {
+  const s = makeState({ volume: 0.5, lastFed: null, baked: true })
+  assert.equal(DS.canFeed(s), true)
 })
 
 // ── canStart ───────────────────────────────────────────────
 
-test("canStart is true when volume is 0 and not baked", () => {
+test("canStart is true when volume is 0", () => {
   assert.equal(DS.canStart(makeState()), true)
 })
 
@@ -223,84 +256,111 @@ test("canStart is false when volume > 0", () => {
   assert.equal(DS.canStart(makeState({ volume: 0.1 })), false)
 })
 
-test("canStart is false when baked", () => {
-  assert.equal(DS.canStart(makeState({ baked: true })), false)
-})
-
-// ── recentStreak ───────────────────────────────────────────
-
-test("recentStreak counts feed days within 7-day window", () => {
-  const s = makeState({ feedDays: feedDays(0, 1, 2, 3) })
-  assert.equal(DS.recentStreak(s), 4)
-})
-
-test("recentStreak ignores days older than 7 days", () => {
-  const s = makeState({ feedDays: feedDays(0, 1, 8, 10) })
-  assert.equal(DS.recentStreak(s), 2)
-})
-
-test("recentStreak returns 0 for empty feedDays", () => {
-  assert.equal(DS.recentStreak(makeState()), 0)
+test("canStart is true when volume is 0 even if baked flag is set", () => {
+  assert.equal(DS.canStart(makeState({ baked: true })), true)
 })
 
 // ── canBake ────────────────────────────────────────────────
 
-test("canBake requires 4/7 streak", () => {
-  const s = makeState({ volume: 0.5, feedDays: feedDays(0, 1, 2) })
-  assert.equal(DS.canBake(s), false)
+test("canBake requires volume and enough bubbles, not age or streak", () => {
+  assert.equal(DS.canBake(bakableState({ bubbles: 0.2 })), false)
+  assert.equal(DS.canBake(bakableState({ volume: 0.05, bubbles: 0.5 })), false)
+  assert.equal(DS.canBake(bakableState()), true)
 })
 
-test("canBake is true with 4 feed days in window", () => {
-  const s = makeState({ volume: 0.5, feedDays: feedDays(0, 1, 2, 3) })
+test("showFeed stays true on a bakeable starter", () => {
+  const s = bakableState({ lastFed: daysAgoIso(1) })
   assert.equal(DS.canBake(s), true)
+  assert.equal(DS.canFeed(s), true)
+  assert.equal(DS.showFeed(s), true)
 })
 
-test("canBake is false when baked", () => {
-  const s = makeState({ volume: 0.5, baked: true, feedDays: feedDays(0, 1, 2, 3) })
-  assert.equal(DS.canBake(s), false)
-})
-
-test("canBake is false when volume is 0", () => {
-  const s = makeState({ volume: 0, feedDays: feedDays(0, 1, 2, 3) })
-  assert.equal(DS.canBake(s), false)
+test("feedButtonText names an out-of-window feed instead of blocking it", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, lastFed: daysAgoIso(1)
+  }, feedWindowOffset(150)))
+  assert.equal(DS.canFeed(s), true)
+  assert.equal(DS.inFeedWindow(s), false)
+  assert.equal(DS.feedButtonText(s), "Feed (off-schedule)")
 })
 
 // ── feed ───────────────────────────────────────────────────
 
-test("feed increases volume, bubbles, and recovers darkness", () => {
-  const s = makeState({ volume: 0.3, bubbles: 0.2, darkness: 0.4, lastFed: null })
+test("a perfect feed on a mature starter raises health; darkness is 1 - health", () => {
+  const s = makeState(Object.assign({
+    volume: 0.3, bubbles: 0.2, lastFed: null,
+    created: daysAgoIso(7)
+  }, feedWindowOffset(0)))
   const next = DS.feed(s)
   assert.equal(next.volume, 0.42)
-  assert.equal(next.bubbles, 0.35)
-  assert.equal(next.darkness, 0.34)
+  almostEqual(next.bubbles, 0.35)
+  almostEqual(next.darkness, 0.65)
   assert.ok(next.lastFed)
 })
 
-test("feed clamps volume and bubbles to 1", () => {
-  const s = makeState({ volume: 0.95, bubbles: 0.9, darkness: 0, lastFed: null })
+test("a moderate feed (±45m) on a mature starter applies half the health change", () => {
+  const s = makeState(Object.assign({
+    volume: 0.3, bubbles: 0.2, lastFed: null,
+    created: daysAgoIso(7)
+  }, feedWindowOffset(45)))
+  const next = DS.feed(s)
+  almostEqual(next.bubbles, 0.275)
+  almostEqual(next.darkness, 0.725)
+})
+
+test("a late feed (±90m) on a mature starter applies a quarter of the health change", () => {
+  const s = makeState(Object.assign({
+    volume: 0.3, bubbles: 0.2, lastFed: null,
+    created: daysAgoIso(7)
+  }, feedWindowOffset(90)))
+  const next = DS.feed(s)
+  almostEqual(next.bubbles, 0.2375)
+  almostEqual(next.darkness, 0.7625)
+})
+
+test("feeding outside ±2h adds volume, keeps health, and moves the perfect window", () => {
+  const s = makeState(Object.assign({
+    volume: 0.3, bubbles: 0.2, lastFed: null,
+    created: daysAgoIso(7)
+  }, feedWindowOffset(150)))
+  const next = DS.feed(s)
+  assert.equal(next.volume, 0.42)
+  assert.equal(next.bubbles, 0.2)
+  almostEqual(next.darkness, 0.8)
+  const now = new Date()
+  const expected = now.getHours() * 60 + now.getMinutes()
+  assert.ok(Math.abs(next.feedWindowMinutes - expected) <= 1)
+})
+
+test("a perfect feed on day 1 raises full health; display is 1/7 intensity", () => {
+  const s = makeState(Object.assign({
+    volume: 0.3, bubbles: 0.5, lastFed: null,
+    created: new Date().toISOString()
+  }, feedWindowOffset(0)))
+  const next = DS.feed(s)
+  almostEqual(next.bubbles, 0.65)
+  almostEqual(next.darkness, 0.35)
+  almostEqual(DS.displayBubbles(next), 0.65 / 7)
+  almostEqual(DS.displayDarkness(next), 0.35 / 7)
+})
+
+test("feed clamps volume to 1", () => {
+  const s = makeState(Object.assign({
+    volume: 0.95, bubbles: 0.2, lastFed: null,
+    created: daysAgoIso(7)
+  }, feedWindowOffset(0)))
   const next = DS.feed(s)
   assert.equal(next.volume, 1)
+})
+
+test("feed clamps health to 1 and darkness to 0", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.95, lastFed: null,
+    created: daysAgoIso(7)
+  }, feedWindowOffset(0)))
+  const next = DS.feed(s)
   assert.equal(next.bubbles, 1)
-})
-
-test("feed clamps darkness recovery to 0", () => {
-  const s = makeState({ volume: 0.5, darkness: 0.02, lastFed: null })
-  const next = DS.feed(s)
   assert.equal(next.darkness, 0)
-})
-
-test("feed adds today to feedDays", () => {
-  const s = makeState({ volume: 0.5, lastFed: null })
-  const next = DS.feed(s)
-  assert.equal(next.feedDays.length, 1)
-  assert.match(next.feedDays[0], /^\d{4}-\d{2}-\d{2}$/)
-})
-
-test("feed does not duplicate today in feedDays", () => {
-  const s = makeState({ lastFed: null, feedDays: [DS.todayKey()] })
-  const next = DS.feed(s)
-  const todayMatches = next.feedDays.filter(d => d === DS.todayKey())
-  assert.equal(todayMatches.length, 1)
 })
 
 test("feed does not mutate the original state", () => {
@@ -316,22 +376,25 @@ test("feed returns the same reference when canFeed is false", () => {
 
 // ── startJar ───────────────────────────────────────────────
 
-test("startJar initializes a new starter", () => {
+test("startJar initializes a new starter at perfect health", () => {
   const s = makeState({ volume: 0, darkness: 0.8 })
   const next = DS.startJar(s)
   assert.equal(next.volume, 0.1)
-  assert.equal(next.bubbles, 0.1)
+  assert.equal(next.bubbles, 1)
   assert.equal(next.darkness, 0)
   assert.equal(next.baked, false)
+  almostEqual(DS.displayBubbles(next), 1 / 7)
+  almostEqual(DS.displayDarkness(next), 0)
   assert.ok(next.created)
   assert.ok(next.lastFed)
-  assert.equal(next.feedDays.length, 1)
-  assert.match(next.feedDays[0], /^\d{4}-\d{2}-\d{2}$/)
 })
 
-test("startJar sets feedWindowHour to current hour", () => {
+test("startJar sets the feed window to the current time", () => {
   const next = DS.startJar(makeState())
-  assert.equal(next.feedWindowHour, new Date().getHours())
+  const now = new Date()
+  assert.equal(next.feedWindowHour, now.getHours())
+  const expected = now.getHours() * 60 + now.getMinutes()
+  assert.ok(Math.abs(next.feedWindowMinutes - expected) <= 1)
 })
 
 test("startJar does not mutate the original state", () => {
@@ -342,76 +405,151 @@ test("startJar does not mutate the original state", () => {
 
 // ── bake ───────────────────────────────────────────────────
 
-test("bake sets baked to true when streak is met", () => {
-  const s = makeState({ volume: 0.5, feedDays: feedDays(0, 1, 2, 3) })
+test("bake subtracts one daily dose from volume and logs loaf quality from health", () => {
+  const s = bakableState()
   const next = DS.bake(s)
-  assert.equal(next.baked, true)
+  almostEqual(next.volume, 0.5 - DS.VOLUME_PER_FEED)
+  assert.equal(next.bubbles, 0.5)
+  assert.equal(next.baked, false)
+  assert.equal(next.loaves.length, 1)
+  assert.equal(next.loaves[0].quality, 0.5)
+  assert.ok(next.loaves[0].bakedAt)
 })
 
-test("bake returns same reference when streak not met", () => {
-  const s = makeState({ volume: 0.5, feedDays: feedDays(0, 1) })
+test("bake returns same reference when bubbles are too low", () => {
+  const s = bakableState({ bubbles: 0.2 })
   assert.equal(DS.bake(s), s)
 })
 
 test("bake does not mutate the original state", () => {
-  const s = makeState({ volume: 0.5, feedDays: feedDays(0, 1, 2, 3) })
+  const s = bakableState()
   DS.bake(s)
-  assert.equal(s.baked, false)
+  assert.equal(s.volume, 0.5)
 })
 
-// ── advanceDay ─────────────────────────────────────────────
-
-test("advanceDay decreases bubbles and increases darkness", () => {
-  const s = makeState({ volume: 0.5, bubbles: 0.6, darkness: 0.2 })
-  const next = DS.advanceDay(s)
-  assert.equal(next.bubbles, 0.52)
-  assert.ok(Math.abs(next.darkness - 0.24) < 1e-10, `darkness=${next.darkness}`)
+test("bake can empty the jar when volume equals one daily dose", () => {
+  const s = bakableState({ volume: DS.VOLUME_PER_FEED })
+  const next = DS.bake(s)
+  assert.equal(next.volume, 0)
+  assert.equal(DS.canStart(next), true)
 })
 
-test("advanceDay clamps bubbles to 0", () => {
-  const s = makeState({ volume: 0.5, bubbles: 0.03, darkness: 0.5 })
-  const next = DS.advanceDay(s)
-  assert.equal(next.bubbles, 0)
+test("feed after bake restores one daily dose", () => {
+  const s = bakableState({ lastFed: null })
+  const baked = DS.bake(s)
+  const fed = DS.feed(baked)
+  assert.ok(Math.abs(fed.volume - 0.5) < 1e-10, `volume=${fed.volume}`)
 })
 
-test("advanceDay clamps darkness to 1", () => {
-  const s = makeState({ volume: 0.5, bubbles: 0.5, darkness: 0.98 })
+// ── health / display / neglect ─────────────────────────────
+
+test("day-1 perfect health shows 1/7 bubbles and no darkness", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(),
+    created: new Date().toISOString()
+  })
+  almostEqual(DS.health(s), 1)
+  almostEqual(DS.displayBubbles(s), 1 / 7)
+  almostEqual(DS.displayDarkness(s), 0)
+})
+
+test("day-2 neglected health is shown at 2/7 intensity", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 0.4, lastFed: new Date().toISOString(),
+    created: daysAgoIso(1)
+  })
+  almostEqual(DS.displayBubbles(s), 0.4 * 2 / 7)
+  almostEqual(DS.displayDarkness(s), 0.6 * 2 / 7)
+})
+
+test("a mature jar displays health at full intensity", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 0.4, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  })
+  almostEqual(DS.displayBubbles(s), 0.4)
+  almostEqual(DS.displayDarkness(s), 0.6)
+})
+
+test("health is unchanged until 26 hours after the last feed", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 0.8,
+    lastFed: new Date(Date.now() - 25 * HOUR).toISOString(),
+    created: daysAgoIso(10)
+  })
+  almostEqual(DS.health(s), 0.8)
+})
+
+test("health drops after the 2h grace past the next perfect time, more with each extra hour", () => {
+  const base = {
+    volume: 0.5, bubbles: 0.8, created: daysAgoIso(10)
+  }
+  const h27 = DS.health(makeState(Object.assign({
+    lastFed: new Date(Date.now() - 27 * HOUR).toISOString()
+  }, base)))
+  const h28 = DS.health(makeState(Object.assign({
+    lastFed: new Date(Date.now() - 28 * HOUR).toISOString()
+  }, base)))
+  assert.ok(h27 < 0.8, `27h health=${h27}`)
+  assert.ok(h28 < h27, `28h health=${h28} should be < 27h ${h27}`)
+})
+
+test("a late feed after decay freezes health and does not restore it", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.8, lastFed: new Date(Date.now() - 30 * HOUR).toISOString(),
+    created: daysAgoIso(10)
+  }, feedWindowOffset(150)))
+  const before = DS.health(s)
+  const next = DS.feed(s)
+  almostEqual(next.bubbles, before)
+  almostEqual(DS.health(next), before)
+})
+
+test("advanceDay does not apply a lump of neglect", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 0.6,
+    lastFed: new Date(Date.now() - 25 * HOUR).toISOString(),
+    created: daysAgoIso(10)
+  })
   const next = DS.advanceDay(s)
-  assert.equal(next.darkness, 1)
+  assert.equal(next.bubbles, 0.6)
 })
 
 test("advanceDay skips when volume is 0", () => {
-  const s = makeState({ volume: 0, bubbles: 0.5, darkness: 0.2 })
+  const s = makeState({ volume: 0, bubbles: 0.5 })
   assert.equal(DS.advanceDay(s), s)
 })
 
-test("advanceDay skips when baked", () => {
-  const s = makeState({ volume: 0.5, baked: true, bubbles: 0.5, darkness: 0.2 })
+test("advanceDay returns the same object so callers skip persist", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 0.6,
+    lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
+  })
   assert.equal(DS.advanceDay(s), s)
-})
-
-test("advanceDay does not mutate the original state", () => {
-  const s = makeState({ volume: 0.5, bubbles: 0.6, darkness: 0.2 })
-  DS.advanceDay(s)
-  assert.equal(s.bubbles, 0.6)
 })
 
 // ── isDead ─────────────────────────────────────────────────
 
-test("isDead when darkness reaches 1.0 and volume > 0", () => {
-  assert.equal(DS.isDead(makeState({ volume: 0.5, darkness: 1.0 })), true)
+test("isDead when health has reached 0 and volume > 0", () => {
+  assert.equal(DS.isDead(makeState({
+    volume: 0.5, bubbles: 0, lastFed: new Date().toISOString()
+  })), true)
 })
 
-test("isDead is false when darkness < 1.0", () => {
-  assert.equal(DS.isDead(makeState({ volume: 0.5, darkness: 0.99 })), false)
+test("isDead is false when health remains", () => {
+  assert.equal(DS.isDead(makeState({
+    volume: 0.5, bubbles: 0.01, lastFed: new Date().toISOString()
+  })), false)
 })
 
 test("isDead is false when volume is 0", () => {
-  assert.equal(DS.isDead(makeState({ volume: 0, darkness: 1.0 })), false)
+  assert.equal(DS.isDead(makeState({ volume: 0, bubbles: 0 })), false)
 })
 
-test("isDead is false when baked", () => {
-  assert.equal(DS.isDead(makeState({ volume: 0.5, darkness: 1.0, baked: true })), false)
+test("isDead ignores baked flag", () => {
+  assert.equal(DS.isDead(makeState({
+    volume: 0.5, bubbles: 0, baked: true, lastFed: new Date().toISOString()
+  })), true)
 })
 
 // ── aliveText ──────────────────────────────────────────────
@@ -435,53 +573,44 @@ test("aliveText says 'N days old' for N >= 2", () => {
   assert.equal(DS.aliveText(s), "5 days old")
 })
 
-// ── streakText ─────────────────────────────────────────────
-
-test("streakText shows count out of 7", () => {
-  const s = makeState({ feedDays: feedDays(0, 1, 2) })
-  assert.equal(DS.streakText(s), "3/7 feeds this week")
-})
-
 // ── statusText ─────────────────────────────────────────────
 
 // Helper: create a state guaranteed to be outside the feed window
 function outsideFeedWindow(overrides = {}) {
-  const now = new Date()
-  return makeState(Object.assign({
-    feedWindowHour: (now.getHours() + 5) % 24
-  }, overrides))
+  return makeState(Object.assign(feedWindowOffset(5 * 60), overrides))
 }
 
 test("statusText: empty jar", () => {
   assert.match(DS.statusText(makeState()), /Empty jar/)
 })
 
-test("statusText: baked", () => {
-  assert.match(DS.statusText(makeState({ volume: 0.5, baked: true })), /Baked/)
+test("statusText: baked flag does not override a live starter", () => {
+  const s = makeState({ volume: 0.5, bubbles: 1, baked: true, lastFed: new Date().toISOString() })
+  assert.match(DS.statusText(s), /Fed today/)
 })
 
 test("statusText: dead", () => {
-  assert.match(DS.statusText(makeState({ volume: 0.5, darkness: 1.0 })), /died/)
+  assert.match(DS.statusText(makeState({
+    volume: 0.5, bubbles: 0, lastFed: new Date().toISOString()
+  })), /died/)
 })
 
 test("statusText: time to feed (in window, not fed today)", () => {
-  const now = new Date()
-  const s = makeState({
-    volume: 0.5,
-    feedWindowHour: now.getHours(),
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 2 * DAY).toISOString()
-  })
+  }, feedWindowOffset(0)))
   assert.match(DS.statusText(s), /Time to feed/)
 })
 
 test("statusText: fed today", () => {
-  const s = makeState({ volume: 0.5, lastFed: new Date().toISOString() })
+  const s = makeState({ volume: 0.5, bubbles: 1, lastFed: new Date().toISOString() })
   assert.match(DS.statusText(s), /Fed today/)
 })
 
 test("statusText: hungry (> 24h since feed)", () => {
   const s = outsideFeedWindow({
-    volume: 0.5,
+    volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
   })
   assert.match(DS.statusText(s), /Hungry/)
@@ -492,13 +621,13 @@ test("statusText: could use a feeding and happy starter are unreachable (fedToda
   // but fedToday is false only when lastFed is a different day (hoursSince >= 24).
   // The hours-based branches are dead code in the current priority chain.
   const s1 = outsideFeedWindow({
-    volume: 0.5,
+    volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
   })
   assert.match(DS.statusText(s1), /Hungry/)
 
   const s2 = outsideFeedWindow({
-    volume: 0.5,
+    volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 24.5 * HOUR).toISOString()
   })
   assert.match(DS.statusText(s2), /Hungry/)
@@ -506,50 +635,24 @@ test("statusText: could use a feeding and happy starter are unreachable (fedToda
 
 // ── inFeedWindow (edge cases) ──────────────────────────────
 
-test("inFeedWindow: diff exactly at FEED_WINDOW_HOURS is inside", () => {
-  const now = new Date()
-  const s = makeState({ feedWindowHour: (now.getHours() + DS.FEED_WINDOW_HOURS) % 24, baked: false })
+test("inFeedWindow: 2 hours away is inside", () => {
+  const s = makeState(Object.assign({ baked: false }, feedWindowOffset(120)))
   assert.equal(DS.inFeedWindow(s), true)
 })
 
-test("inFeedWindow: diff one over FEED_WINDOW_HOURS is outside", () => {
-  const now = new Date()
-  const s = makeState({ feedWindowHour: (now.getHours() + DS.FEED_WINDOW_HOURS + 1) % 24, baked: false })
+test("inFeedWindow: just over 2 hours away is outside", () => {
+  const s = makeState(Object.assign({ baked: false }, feedWindowOffset(121)))
   assert.equal(DS.inFeedWindow(s), false)
-})
-
-test("inFeedWindow: feedWindowHour equals current hour (diff=0) is inside", () => {
-  const now = new Date()
-  const s = makeState({ feedWindowHour: now.getHours(), baked: false })
-  assert.equal(DS.inFeedWindow(s), true)
-})
-
-// ── feed (edge cases) ─────────────────────────────────────
-
-test("feed preserves existing feedDays from prior days", () => {
-  const yesterday = new Date(Date.now() - DAY).toISOString().slice(0, 10)
-  const s = makeState({ volume: 0.5, lastFed: null, feedDays: [yesterday] })
-  const next = DS.feed(s)
-  assert.equal(next.feedDays.length, 2)
-  assert.ok(next.feedDays.includes(yesterday))
-})
-
-test("feed does not add a new entry when feedDays already contains today", () => {
-  const today = DS.todayKey()
-  const s = makeState({ volume: 0.5, lastFed: null, feedDays: [today] })
-  const next = DS.feed(s)
-  assert.equal(next.feedDays.length, 1)
 })
 
 // ── startJar (edge cases) ─────────────────────────────────
 
 test("startJar resets a previously baked starter", () => {
-  const s = makeState({ volume: 0.8, baked: true, darkness: 0.5, feedDays: feedDays(0, 1, 2) })
+  const s = makeState({ volume: 0.8, baked: true, darkness: 0.5 })
   const next = DS.startJar(s)
   assert.equal(next.baked, false)
   assert.equal(next.volume, 0.1)
   assert.equal(next.darkness, 0)
-  assert.equal(next.feedDays.length, 1)
 })
 
 test("startJar resets a dead starter", () => {
@@ -561,71 +664,74 @@ test("startJar resets a dead starter", () => {
 
 // ── bake (edge cases) ─────────────────────────────────────
 
-test("bake requires exactly STREAK_REQUIRED feed days", () => {
-  const justBelow = makeState({ volume: 0.5, feedDays: feedDays(0, 1, 2) })
-  assert.equal(DS.canBake(justBelow), false)
-
-  const exactly = makeState({ volume: 0.5, feedDays: feedDays(0, 1, 2, 3) })
-  assert.equal(DS.canBake(exactly), true)
-
-  const above = makeState({ volume: 0.5, feedDays: feedDays(0, 1, 2, 3, 4) })
-  assert.equal(DS.canBake(above), true)
+test("canBake stays true after baking as long as volume and health remain", () => {
+  const s = bakableState({ volume: 0.5 })
+  const once = DS.bake(s)
+  assert.equal(DS.canBake(once), true)
+  const twice = DS.bake(once)
+  assert.ok(Math.abs(twice.volume - (0.5 - 2 * DS.VOLUME_PER_FEED)) < 1e-10)
 })
 
-test("bake works on a dead starter (canBake does not check isDead)", () => {
-  const s = makeState({ volume: 0.5, darkness: 1.0, feedDays: feedDays(0, 1, 2, 3) })
-  const next = DS.bake(s)
-  assert.equal(next.baked, true)
+test("bake does not consume a dead starter", () => {
+  const s = bakableState({ bubbles: 0, darkness: 1 })
+  assert.equal(DS.bake(s), s)
 })
 
-// ── advanceDay (edge cases) ───────────────────────────────
-
-test("advanceDay applied multiple times reaches death", () => {
-  let s = makeState({ volume: 0.5, bubbles: 1.0, darkness: 0.0 })
-  let steps = 0
-  while (!DS.isDead(s) && steps < 100) {
-    s = DS.advanceDay(s)
-    steps++
-  }
-  assert.ok(DS.isDead(s))
-  assert.ok(steps <= Math.ceil(1.0 / DS.DARKNESS_PER_SKIP))
+test("two perfect feeds on a mature starter reach bakeable displayed bubbles", () => {
+  let s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.1, lastFed: null,
+    created: daysAgoIso(7)
+  }, feedWindowOffset(0)))
+  s = DS.feed(s)
+  s.lastFed = daysAgoIso(1)
+  s = DS.feed(s)
+  almostEqual(s.bubbles, 0.4)
+  almostEqual(s.darkness, 0.6)
+  assert.equal(DS.canBake(s), true)
 })
 
-test("advanceDay applied to max bubbles and zero darkness", () => {
-  const s = makeState({ volume: 0.5, bubbles: 1.0, darkness: 0.0 })
-  const next = DS.advanceDay(s)
-  assert.equal(next.bubbles, 0.92)
-  assert.ok(Math.abs(next.darkness - DS.DARKNESS_PER_SKIP) < 1e-10)
+test("perfect health on day 1 is not bakeable because display is too quiet", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(),
+    created: new Date().toISOString()
+  })
+  assert.equal(DS.health(s), 1)
+  assert.equal(DS.canBake(s), false)
 })
 
 // ── isDead (edge cases) ───────────────────────────────────
 
-test("isDead: darkness just below DARKNESS_DEAD is alive", () => {
-  const s = makeState({ volume: 0.5, darkness: DS.DARKNESS_DEAD - 0.001 })
+test("isDead: tiny remaining health is alive", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 0.001, lastFed: new Date().toISOString()
+  })
   assert.equal(DS.isDead(s), false)
 })
 
 // ── statusText (edge cases) ───────────────────────────────
 
-test("statusText: baked takes priority over dead", () => {
-  const s = makeState({ volume: 0.5, darkness: 1.0, baked: true })
-  assert.match(DS.statusText(s), /Baked/)
+test("statusText: dead is not hidden by baked flag", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 0, baked: true, lastFed: new Date().toISOString()
+  })
+  assert.match(DS.statusText(s), /died/)
 })
 
 test("statusText: fed today takes priority over inFeedWindow", () => {
-  const now = new Date()
-  const s = makeState({
-    volume: 0.5,
-    feedWindowHour: now.getHours(),
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 1,
     lastFed: new Date().toISOString()
-  })
+  }, feedWindowOffset(0)))
   assert.match(DS.statusText(s), /Fed today/)
 })
 
 // ── doughColorComponents (edge cases) ─────────────────────
 
 test("doughColorComponents: darkness at 1.0 returns minimum RGB", () => {
-  const c = DS.doughColorComponents(makeState({ volume: 0.5, darkness: 1.0 }))
+  const c = DS.doughColorComponents(makeState({
+    volume: 0.5, bubbles: 0, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  }))
   assert.ok(c.r < 0.6, `r=${c.r}`)
   assert.ok(c.g < 0.5, `g=${c.g}`)
   assert.ok(c.b < 0.3, `b=${c.b}`)
@@ -633,7 +739,10 @@ test("doughColorComponents: darkness at 1.0 returns minimum RGB", () => {
 })
 
 test("doughColorComponents: mid-range darkness produces intermediate color", () => {
-  const c = DS.doughColorComponents(makeState({ volume: 0.5, darkness: 0.5 }))
+  const c = DS.doughColorComponents(makeState({
+    volume: 0.5, bubbles: 0.5, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  }))
   assert.ok(c.r > 0.5 && c.r < 0.9, `r=${c.r}`)
   assert.ok(c.g > 0.4 && c.g < 0.8, `g=${c.g}`)
   assert.ok(c.b > 0.2 && c.b < 0.6, `b=${c.b}`)
@@ -641,7 +750,10 @@ test("doughColorComponents: mid-range darkness produces intermediate color", () 
 })
 
 test("doughColorComponents: fresh dough has higher R than B", () => {
-  const c = DS.doughColorComponents(makeState({ volume: 0.5, darkness: 0 }))
+  const c = DS.doughColorComponents(makeState({
+    volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  }))
   assert.ok(c.r > c.b, `r=${c.r} should be > b=${c.b}`)
 })
 
@@ -653,7 +765,10 @@ test("doughColorComponents returns transparent when volume is 0", () => {
 })
 
 test("doughColorComponents returns beige for fresh dough", () => {
-  const c = DS.doughColorComponents(makeState({ volume: 0.5, darkness: 0 }))
+  const c = DS.doughColorComponents(makeState({
+    volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  }))
   assert.ok(c.r > 0.8, `r=${c.r}`)
   assert.ok(c.g > 0.7, `g=${c.g}`)
   assert.ok(c.b > 0.5, `b=${c.b}`)
@@ -661,15 +776,21 @@ test("doughColorComponents returns beige for fresh dough", () => {
 })
 
 test("doughColorComponents darkens as darkness increases", () => {
-  const light = DS.doughColorComponents(makeState({ volume: 0.5, darkness: 0 }))
-  const dark = DS.doughColorComponents(makeState({ volume: 0.5, darkness: 0.8 }))
+  const light = DS.doughColorComponents(makeState({
+    volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(), created: daysAgoIso(7)
+  }))
+  const dark = DS.doughColorComponents(makeState({
+    volume: 0.5, bubbles: 0.2, lastFed: new Date().toISOString(), created: daysAgoIso(7)
+  }))
   assert.ok(dark.r < light.r)
   assert.ok(dark.g < light.g)
   assert.ok(dark.b < light.b)
 })
 
 test("doughColorComponents clamps at extremes", () => {
-  const c = DS.doughColorComponents(makeState({ volume: 0.5, darkness: 1 }))
+  const c = DS.doughColorComponents(makeState({
+    volume: 0.5, bubbles: 0, lastFed: new Date().toISOString(), created: daysAgoIso(7)
+  }))
   assert.ok(c.r >= 0 && c.r <= 1)
   assert.ok(c.g >= 0 && c.g <= 1)
   assert.ok(c.b >= 0 && c.b <= 1)

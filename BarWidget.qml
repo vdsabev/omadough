@@ -14,6 +14,7 @@ Panel {
   property var dough: DoughState.defaultState()
   property string statusMsg: ""
   property bool popupOpen: false
+  property int clock: 0
 
   readonly property bool verticalBar: bar ? bar.vertical : false
   readonly property color themeFg: bar ? bar.foreground : Color.foreground
@@ -25,16 +26,7 @@ Panel {
   implicitHeight: verticalBar ? 28 : (bar ? bar.barSize : 26)
 
   function persistState() {
-    stateFile.setText(JSON.stringify({
-      created: root.dough.created,
-      lastFed: root.dough.lastFed,
-      volume: root.dough.volume,
-      bubbles: root.dough.bubbles,
-      darkness: root.dough.darkness,
-      baked: root.dough.baked,
-      feedWindowHour: root.dough.feedWindowHour,
-      feedDays: root.dough.feedDays
-    }, null, 2))
+    stateFile.setText(JSON.stringify(DoughState.persistFields(root.dough), null, 2))
   }
 
   function refreshStatus() {
@@ -45,7 +37,10 @@ Panel {
     interval: 60000
     running: true
     repeat: true
-    onTriggered: root.refreshStatus()
+    onTriggered: {
+      root.clock++
+      root.refreshStatus()
+    }
   }
 
   Timer {
@@ -57,8 +52,11 @@ Panel {
     onTriggered: {
       var today = DoughState.todayKey()
       if (lastDay !== "" && lastDay !== today) {
-        root.dough = DoughState.advanceDay(root.dough)
-        root.persistState()
+        var next = DoughState.advanceDay(root.dough)
+        if (next !== root.dough) {
+          root.dough = next
+          root.persistState()
+        }
       }
       lastDay = today
       root.refreshStatus()
@@ -98,11 +96,12 @@ Panel {
       Jar {
         anchors.fill: parent
         volume: root.dough.volume
-        bubbles: root.dough.bubbles
-        darkness: root.dough.darkness
+        bubbles: { root.clock; return DoughState.displayBubbles(root.dough) }
+        darkness: { root.clock; return DoughState.displayDarkness(root.dough) }
         baked: root.dough.baked
         rimColor: root.themeAccent
         doughColor: {
+          root.clock
           var c = DoughState.doughColorComponents(root.dough)
           return Qt.rgba(c.r, c.g, c.b, c.a)
         }
@@ -125,14 +124,13 @@ Panel {
     bar: root.bar
     open: root.opened
     doughState: root.dough
+    clock: root.clock
     statusMsg: root.statusMsg
     aliveMsg: DoughState.aliveText(root.dough)
-    streakMsg: DoughState.streakText(root.dough)
-    feedable: DoughState.canFeed(root.dough) && DoughState.inFeedWindow(root.dough)
+    feedable: DoughState.canFeed(root.dough)
     bakeable: DoughState.canBake(root.dough)
     startable: DoughState.canStart(root.dough)
     dead: DoughState.isDead(root.dough)
-    inWindow: DoughState.inFeedWindow(root.dough)
     onCloseRequested: root.close()
     onFeedRequested: {
       root.dough = DoughState.feed(root.dough)

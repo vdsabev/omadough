@@ -9,12 +9,10 @@ Put the starter in the fridge to keep it alive while away.
 - Cannot refeed while in the fridge — you must take it out first
 - Visual indicator on the jar (e.g., cold breath particles, blue tint)
 
-## Baking Affects Volume
+## Baking: bubbles after a loaf
 
-Baking bread takes away from the starter's volume.
+Baking already removes one daily dose (`VOLUME_PER_FEED`) of volume; feeding restores that dose.
 
-- Baking reduces `volume` by a configurable amount
-- Refeeding flour+water restores volume but reduces `bubbles`
-- Darkness is **not** affected by refeeding after baking — you must keep feeding for bubbles to recover
-- Minimum bubble threshold required to bake (e.g., `bubbles >= 0.3`)
+- Refeeding after a bake should reduce `bubbles`
+- Darkness is **not** affected by refeeding after baking — keep feeding for bubbles to recover
 - If bubbles are too low, the Bake button is disabled with a tooltip explaining why
