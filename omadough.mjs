@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
 import { loadLib } from "./loadLib.mjs"
@@ -31,20 +31,42 @@ The bar widget reloads that file when it changes.
 `
 }
 
+const MAX_STATE_BYTES = 1 << 20
+
+// O_NONBLOCK so a FIFO at this path fails fast instead of blocking the open.
 function loadState() {
+  let fd
   try {
-    return DS.parseState(readFileSync(STATE_PATH, "utf8"))
+    fd = openSync(STATE_PATH, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   } catch (e) {
     if (e && e.code === "ENOENT") return DS.defaultState()
+    if (e && e.code === "ELOOP") fail(`Refusing to follow a symlink at ${STATE_PATH}`)
     throw e
+  }
+  try {
+    const st = fstatSync(fd)
+    if (!st.isFile())
+      fail(`Not a regular file: ${STATE_PATH}`)
+    if (st.size > MAX_STATE_BYTES)
+      fail(`State file is too large (${st.size} bytes): ${STATE_PATH}`)
+    return DS.parseState(readFileSync(fd, "utf8"))
+  } finally {
+    closeSync(fd)
   }
 }
 
 function saveState(state) {
   mkdirSync(STATE_DIR, { recursive: true })
-  const tmp = STATE_PATH + ".tmp"
-  writeFileSync(tmp, JSON.stringify(DS.persistFields(state), null, 2) + "\n")
-  renameSync(tmp, STATE_PATH)
+  const tmp = `${STATE_PATH}.${process.pid}.tmp`
+  const text = JSON.stringify(DS.persistFields(state), null, 2) + "\n"
+  // O_EXCL: never write through a name that already exists at the temp path.
+  writeFileSync(tmp, text, { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW })
+  try {
+    renameSync(tmp, STATE_PATH)
+  } catch (e) {
+    try { unlinkSync(tmp) } catch {}
+    throw e
+  }
 }
 
 function pct(n) {
@@ -54,13 +76,13 @@ function pct(n) {
 function formatStatus(state) {
   const lines = [DS.statusText(state)]
   const age = DS.aliveText(state)
-  if (age) lines.push(age)
+  if (age) lines.push(`started ${age}`)
   if (state.volume > 0) {
     lines.push(
       `volume ${pct(state.volume)}  bubbles ${pct(DS.displayBubbles(state))}  health ${pct(DS.health(state))}`
     )
     if (Array.isArray(state.loaves) && state.loaves.length)
-      lines.push(`${state.loaves.length} loaf${state.loaves.length === 1 ? "" : "es"} baked`)
+      lines.push(`${state.loaves.length} ${state.loaves.length === 1 ? "loaf" : "loaves"} baked`)
   }
   return lines.join("\n")
 }

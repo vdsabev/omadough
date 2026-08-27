@@ -63,16 +63,40 @@ Panel {
     }
   }
 
+  readonly property int maxStateBytes: 1048576
+
+  // Seeding waits for both signals: mkdir must have run, and the load must have
+  // failed with FileNotFound. Any other failure leaves the existing file alone.
+  property bool dirReady: false
+  property bool stateMissing: false
+
+  function seedState() {
+    if (dirReady && stateMissing) {
+      stateMissing = false
+      stateFile.setText(JSON.stringify(DoughState.defaultState(), null, 2))
+    }
+  }
+
   FileView {
     id: stateFile
     path: StandardPaths.writableLocation(StandardPaths.HomeLocation) + "/.config/omadough/state.json"
-    blockLoading: true
+    blockLoading: false
     watchChanges: true
     onFileChanged: reload()
     onLoaded: {
-      var s = DoughState.parseState(typeof text === "function" ? text() : text)
-      root.dough = s
+      var raw = typeof text === "function" ? text() : text
+      if (raw.length > root.maxStateBytes) {
+        root.statusMsg = "Omadough: state file is too large"
+        return
+      }
+      root.dough = DoughState.parseState(raw)
       root.refreshStatus()
+    }
+    onLoadFailed: function(error) {
+      if (error === FileViewError.FileNotFound) {
+        root.stateMissing = true
+        root.seedState()
+      }
     }
   }
 
@@ -81,8 +105,8 @@ Panel {
     command: ["mkdir", "-p", StandardPaths.writableLocation(StandardPaths.HomeLocation) + "/.config/omadough"]
     running: true
     onExited: {
-      if (!stateFile.loaded)
-        stateFile.setText(JSON.stringify(DoughState.defaultState(), null, 2))
+      root.dirReady = true
+      root.seedState()
     }
   }
 
