@@ -53,27 +53,24 @@ PanelWindow {
   readonly property real anchorW: anchorItem ? anchorItem.width : 0
   readonly property real anchorH: anchorItem ? anchorItem.height : 0
 
-  function alignedStart(anchorStart, anchorLen, cardLen, screenLen) {
-    var center = anchorStart + anchorLen / 2
-    if (center < screenLen / 3)
-      return anchorStart
-    if (center > screenLen * 2 / 3)
-      return anchorStart + anchorLen - cardLen
-    return center - cardLen / 2
-  }
+  readonly property real cardW: contentWidth
+  readonly property real cardH: contentHeight + (card ? card.contentTopInset : 0)
 
   readonly property point cardOrigin: {
     if (!anchorItem || !bar) return Qt.point(gap, gap)
     var x = 0, y = 0
     if (barVertical) {
-      x = barPos === "left" ? barW + gap : screenW - barW - contentWidth - gap
-      y = alignedStart(anchorPos.y, anchorH, contentHeight, screenH)
+      x = barPos === "left" ? barW + gap : screenW - barW - cardW - gap
+      y = anchorPos.y + anchorH / 2 - cardH / 2
+    } else if (barPos === "bottom") {
+      x = anchorPos.x + anchorW / 2 - cardW / 2
+      y = screenH - barH - cardH - gap
     } else {
-      x = alignedStart(anchorPos.x, anchorW, contentWidth, screenW)
-      y = barPos === "top" ? barH + gap : screenH - barH - contentHeight - gap
+      x = anchorPos.x + anchorW / 2 - cardW / 2
+      y = barH + gap
     }
-    x = Math.max(gap, Math.min(x, screenW - contentWidth - gap))
-    y = Math.max(gap, Math.min(y, screenH - contentHeight - gap))
+    x = Math.max(gap, Math.min(x, screenW - cardW - gap))
+    y = Math.max(gap, Math.min(y, screenH - cardH - gap))
     return Qt.point(Math.round(x), Math.round(y))
   }
 
