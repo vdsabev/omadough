@@ -249,6 +249,13 @@ function aliveText(state) {
   return days + " days old"
 }
 
+function ripenessLabel(state) {
+  if (state.volume === 0) return ""
+  var d = daysSince(state.created)
+  if (d >= DEVELOPMENT_DAYS) return ""
+  return (d + 1) + "/" + DEVELOPMENT_DAYS
+}
+
 function statusText(state) {
   if (state.volume === 0) return "Empty jar — start your starter!"
   if (isDead(state)) return "Your starter has died. Start over."
@@ -263,8 +270,8 @@ function statusText(state) {
 function doughColorComponents(state) {
   if (state.volume === 0) return { r: 0, g: 0, b: 0, a: 0 }
   var d = displayDarkness(state)
-  var r = 0.85 - d * 0.3
-  var g = 0.78 - d * 0.35
-  var b = 0.55 - d * 0.3
+  var r = 1 - d * 0.45
+  var g = 1 - d * 0.55
+  var b = 1 - d * 0.7
   return { r: clamp(r, 0, 1), g: clamp(g, 0, 1), b: clamp(b, 0, 1), a: 1 }
 }

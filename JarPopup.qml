@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
@@ -30,22 +31,6 @@ PanelWindow {
   signal feedRequested()
   signal startRequested()
   signal bakeRequested()
-
-  readonly property real titleBarHeight: closeButton.y + closeButton.height / 2 + Style.space(8)
-
-  property int rounding: 0
-
-  Process {
-    command: ["hyprctl", "getoption", "decoration:rounding"]
-    running: true
-    stdout: StdioCollector {
-      onStreamFinished: {
-        var m = text.match(/int:\s*(\d+)/)
-        if (m)
-          root.rounding = parseInt(m[1], 10)
-      }
-    }
-  }
 
   readonly property var anchorWindow: anchorItem ? anchorItem.QsWindow.window : null
   readonly property string barPos: bar ? bar.position : "top"
@@ -116,6 +101,12 @@ PanelWindow {
       Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
+  HyprlandFocusGrab {
+    active: root.open
+    windows: root.anchorWindow ? [root, root.anchorWindow] : [root]
+    onCleared: root.closeRequested()
+  }
+
   TransformWatcher {
     id: anchorWatcher
     a: anchorWindow ? anchorWindow.contentItem : null
@@ -127,42 +118,11 @@ PanelWindow {
     x: root.cardOrigin.x
     y: root.cardOrigin.y
     width: root.contentWidth
-    height: root.contentHeight + Math.max(card.contentTopInset, root.titleBarHeight)
+    height: root.contentHeight + card.contentTopInset
     color: Color.popups.background
     borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
     padding: root.padding
     radius: Style.cornerRadius
-
-    Text {
-      id: closeButton
-      anchors.top: parent.top
-      anchors.right: parent.right
-      anchors.topMargin: Style.space(4)
-      anchors.rightMargin: Style.space(4) + root.rounding * 0.5
-      text: "\u00d7"
-      color: Color.foreground
-      font.family: Style.font.family
-      font.pixelSize: Style.font.displayLarge
-      opacity: closeMouse.containsMouse ? 1 : 0.5
-
-      MouseArea {
-        id: closeMouse
-        anchors.fill: parent
-        anchors.margins: -Style.space(6)
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: root.closeRequested()
-      }
-    }
-
-    Text {
-      anchors.verticalCenter: closeButton.verticalCenter
-      anchors.left: parent.left
-      anchors.leftMargin: Style.space(8) + root.rounding * 0.5
-      text: "\ud83c\udf5e"
-      font.pixelSize: Style.font.iconLarge
-      color: Color.foreground
-    }
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -174,19 +134,23 @@ PanelWindow {
         id: contentCol
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
-        anchors.topMargin: Math.max(card.contentTopInset, root.titleBarHeight)
+        anchors.topMargin: card.contentTopInset
         width: parent.width - Style.space(16)
         spacing: Style.space(12)
 
         Jar {
           anchors.horizontalCenter: parent.horizontalCenter
-          width: 64
-          height: 80
+          width: 96
+          height: 144
           volume: root.doughState.volume || 0
           bubbles: { root.clock; return DoughState.displayBubbles(root.doughState) }
           darkness: { root.clock; return DoughState.displayDarkness(root.doughState) }
           baked: root.doughState.baked || false
-          doughColor: Color.accent
+          doughColor: {
+            root.clock
+            var c = DoughState.doughColorComponents(root.doughState)
+            return Qt.rgba(c.r, c.g, c.b, c.a)
+          }
         }
 
         Text {
@@ -209,14 +173,27 @@ PanelWindow {
           font.pixelSize: Style.font.caption
         }
 
-        // Volume bar
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          text: {
+            root.clock
+            var label = DoughState.ripenessLabel(root.doughState)
+            return label.length > 0 ? "Ripeness " + label : ""
+          }
+          visible: text.length > 0
+          color: Qt.darker(Color.foreground, 1.5)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
         Row {
           anchors.horizontalCenter: parent.horizontalCenter
           spacing: Style.space(6)
           visible: root.doughState.volume > 0
 
           Text {
-            text: "Vol"
+            text: "Health"
             color: Qt.darker(Color.foreground, 1.5)
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -224,77 +201,15 @@ PanelWindow {
           }
 
           Rectangle {
-            width: 100
+            width: 96
             height: 8
-            radius: 4
             color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
             anchors.verticalCenter: parent.verticalCenter
 
             Rectangle {
-              width: parent.width * (root.doughState.volume || 0)
+              width: { root.clock; return Math.round(24 * DoughState.health(root.doughState)) * 4 }
               height: parent.height
-              radius: parent.radius
               color: Color.accent
-            }
-          }
-        }
-
-        // Bubble bar
-        Row {
-          anchors.horizontalCenter: parent.horizontalCenter
-          spacing: Style.space(6)
-          visible: root.doughState.volume > 0
-
-          Text {
-            text: "Bub"
-            color: Qt.darker(Color.foreground, 1.5)
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            anchors.verticalCenter: parent.verticalCenter
-          }
-
-          Rectangle {
-            width: 100
-            height: 8
-            radius: 4
-            color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
-            anchors.verticalCenter: parent.verticalCenter
-
-            Rectangle {
-              width: { root.clock; return parent.width * DoughState.displayBubbles(root.doughState) }
-              height: parent.height
-              radius: parent.radius
-              color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.7)
-            }
-          }
-        }
-
-        // Darkness bar
-        Row {
-          anchors.horizontalCenter: parent.horizontalCenter
-          spacing: Style.space(6)
-          visible: root.doughState.volume > 0
-
-          Text {
-            text: "Drk"
-            color: Qt.darker(Color.foreground, 1.5)
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            anchors.verticalCenter: parent.verticalCenter
-          }
-
-          Rectangle {
-            width: 100
-            height: 8
-            radius: 4
-            color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
-            anchors.verticalCenter: parent.verticalCenter
-
-            Rectangle {
-              width: { root.clock; return parent.width * DoughState.displayDarkness(root.doughState) }
-              height: parent.height
-              radius: parent.radius
-              color: Qt.rgba(0.6, 0.3, 0.1, 1)
             }
           }
         }

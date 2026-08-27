@@ -22,7 +22,7 @@ Panel {
   readonly property color themeAccent: Color.accent
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
-  implicitWidth: verticalBar ? Style.bar.iconSlot : 36
+  implicitWidth: verticalBar ? Style.bar.iconSlot : 40
   implicitHeight: verticalBar ? 28 : (bar ? bar.barSize : 26)
 
   function persistState() {

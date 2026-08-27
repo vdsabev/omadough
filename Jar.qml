@@ -1,5 +1,6 @@
 import QtQuick
 
+// Mason jar: 12×18. Body walls on the outer columns; fill is 10×14.
 Item {
   id: root
 
@@ -7,85 +8,114 @@ Item {
   property real bubbles: 0
   property real darkness: 0
   property bool baked: false
-  property color doughColor: Qt.rgba(0.85, 0.78, 0.55, 1)
+  property color doughColor: Qt.rgba(1, 1, 1, 1)
   property color rimColor: "#ffe14d"
 
-  implicitWidth: 36
-  implicitHeight: 20
+  implicitWidth: 40
+  implicitHeight: 22
 
-  readonly property real jarW: Math.min(width * 0.6, height * 1.2)
-  readonly property real jarH: height * 0.85
-  readonly property real rimH: height * 0.12
-  readonly property real doughH: jarH * 0.85 * volume
+  readonly property int cols: 12
+  readonly property int rows: 18
+  readonly property int bodyTop: 3
+  readonly property int bodyBottom: 16
+  readonly property int fillMax: 14
+  readonly property int fillUnits: 7
+  readonly property int rowsPerUnit: 2
+  readonly property int fillLeft: 1
+  readonly property int fillWidth: 10
+
+  readonly property real px: Math.max(1, Math.floor(Math.min(width / cols, height / rows)))
+
+  readonly property var sprite: [
+    "..LLLLLLLL..",
+    ".LLLLLLLLLL.",
+    ".G.LLLLLL.G.",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    "G..........G",
+    ".GGGGGGGGGG."
+  ]
+
+  readonly property int fillRows: Math.round(Math.max(0, Math.min(1, volume)) * fillUnits) * rowsPerUnit
+  readonly property int fillTop: bodyBottom + 1 - fillRows
+  readonly property color glassColor: Qt.rgba(rimColor.r * 0.75, rimColor.g * 0.75, rimColor.b * 0.75, 1)
+  readonly property color fillColor: baked ? Qt.rgba(0.65, 0.45, 0.2, 1) : doughColor
+  readonly property color crustColor: Qt.rgba(0.28, 0.16, 0.08, 0.55 + darkness * 0.4)
+  readonly property int crustRows: !baked && volume > 0 && darkness > 0
+    ? Math.max(1, Math.round(darkness * 2))
+    : 0
+  readonly property int bubbleCount: volume > 0 ? Math.floor(bubbles * fillWidth) : 0
+
+  function isInterior(col, row) {
+    return sprite[row].charAt(col) === "." && row >= bodyTop && row <= bodyBottom && col >= fillLeft && col < fillLeft + fillWidth
+  }
+
+  function isBubble(col, row) {
+    if (bubbleCount <= 0)
+      return false
+    var i
+    for (i = 0; i < bubbleCount; i++) {
+      var seed = i * 7 + 3
+      var bc = fillLeft + (seed * 13 % fillWidth)
+      var br = fillTop + (seed * 17 % Math.max(1, fillRows))
+      if (br > bodyBottom)
+        br = bodyBottom
+      if (col === bc && row === br)
+        return true
+    }
+    return false
+  }
+
+  function paint(col, row) {
+    var code = sprite[row].charAt(col)
+    if (code === "L")
+      return rimColor
+    if (code === "G")
+      return glassColor
+    if (fillRows > 0 && isInterior(col, row) && row >= fillTop && row <= bodyBottom) {
+      if (isBubble(col, row))
+        return Qt.rgba(1, 1, 1, 0.45)
+      if (crustRows > 0 && row < fillTop + crustRows)
+        return crustColor
+      return fillColor
+    }
+    return "transparent"
+  }
 
   Item {
     anchors.centerIn: parent
-    width: root.jarW
-    height: root.jarH
+    width: root.px * root.cols
+    height: root.px * root.rows
 
-    // Jar body
-    Rectangle {
-      id: jarBody
-      anchors.bottom: parent.bottom
-      width: parent.width
-      height: parent.height - root.rimH
-      color: "transparent"
-      border.color: Qt.rgba(root.rimColor.r, root.rimColor.g, root.rimColor.b, 0.5)
-      border.width: 1.5
-      radius: 3
-    }
-
-    // Dough fill
-    Rectangle {
-      id: dough
-      anchors.left: jarBody.left
-      anchors.right: jarBody.right
-      anchors.bottom: jarBody.bottom
-      anchors.margins: 2
-      height: root.doughH
-      visible: root.volume > 0
-      color: root.baked ? Qt.rgba(0.65, 0.45, 0.2, 1) : root.doughColor
-      radius: 2
-    }
-
-    // Bubbles
     Repeater {
-      model: root.volume > 0 ? Math.floor(root.bubbles * 12) : 0
+      model: root.cols * root.rows
 
       Rectangle {
         required property int index
-        property real seed: index * 7 + 3
+        readonly property int col: index % root.cols
+        readonly property int row: Math.floor(index / root.cols)
 
-        x: jarBody.x + 3 + (seed * 13 % 20) / 20 * (jarBody.width - 8)
-        y: jarBody.y + jarBody.height - root.doughH + 2
-          + (seed * 17 % 20) / 20 * Math.max(0, root.doughH - 6)
-        width: 2 + (seed % 3)
-        height: width
-        radius: width / 2
-        color: Qt.rgba(1, 1, 1, 0.35)
+        x: root.px * col
+        y: root.px * row
+        width: root.px
+        height: root.px
+        color: {
+          root.volume; root.bubbles; root.darkness; root.baked
+          root.doughColor; root.rimColor
+          return root.paint(col, row)
+        }
       }
-    }
-
-    Rectangle {
-      anchors.left: dough.left
-      anchors.right: dough.right
-      y: dough.y
-      height: root.volume > 0 && !root.baked
-        ? root.darkness * Math.max(2, root.jarH * 0.22)
-        : 0
-      visible: height > 0.5
-      color: Qt.rgba(0.28, 0.16, 0.08, 0.45 + root.darkness * 0.4)
-      radius: 1
-    }
-
-    // Rim / lid
-    Rectangle {
-      anchors.horizontalCenter: parent.horizontalCenter
-      anchors.bottom: jarBody.top
-      width: parent.width + 4
-      height: root.rimH
-      color: root.rimColor
-      radius: 2
     }
   }
 }

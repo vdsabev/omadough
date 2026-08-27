@@ -9,7 +9,7 @@ const DS = loadLib("./DoughState.js", [
   "daysSince", "hoursSince", "inFeedWindow", "fedToday",
   "canFeed", "canStart", "canBake", "showFeed", "feedButtonText",
   "feed", "startJar", "bake", "advanceDay", "isDead",
-  "aliveText", "statusText", "doughColorComponents",
+  "aliveText", "ripenessLabel", "statusText", "doughColorComponents",
   "health", "displayBubbles", "displayDarkness", "persistFields"
 ])
 
@@ -573,6 +573,30 @@ test("aliveText says 'N days old' for N >= 2", () => {
   assert.equal(DS.aliveText(s), "5 days old")
 })
 
+test("ripenessLabel is empty when the jar is empty", () => {
+  assert.equal(DS.ripenessLabel(makeState()), "")
+})
+
+test("ripenessLabel is 1/7 on the start day", () => {
+  const s = makeState({ volume: 0.1, created: new Date().toISOString() })
+  assert.equal(DS.ripenessLabel(s), "1/7")
+})
+
+test("ripenessLabel is 2/7 on the second day", () => {
+  const s = makeState({ volume: 0.1, created: daysAgoIso(1) })
+  assert.equal(DS.ripenessLabel(s), "2/7")
+})
+
+test("ripenessLabel is 7/7 on day 6", () => {
+  const s = makeState({ volume: 0.1, created: daysAgoIso(6) })
+  assert.equal(DS.ripenessLabel(s), "7/7")
+})
+
+test("ripenessLabel hides after the first 7 days", () => {
+  const s = makeState({ volume: 0.1, created: daysAgoIso(7) })
+  assert.equal(DS.ripenessLabel(s), "")
+})
+
 // ── statusText ─────────────────────────────────────────────
 
 // Helper: create a state guaranteed to be outside the feed window
@@ -734,7 +758,7 @@ test("doughColorComponents: darkness at 1.0 returns minimum RGB", () => {
   }))
   assert.ok(c.r < 0.6, `r=${c.r}`)
   assert.ok(c.g < 0.5, `g=${c.g}`)
-  assert.ok(c.b < 0.3, `b=${c.b}`)
+  assert.ok(c.b < 0.35, `b=${c.b}`)
   assert.equal(c.a, 1)
 })
 
@@ -744,14 +768,14 @@ test("doughColorComponents: mid-range darkness produces intermediate color", () 
     created: daysAgoIso(7)
   }))
   assert.ok(c.r > 0.5 && c.r < 0.9, `r=${c.r}`)
-  assert.ok(c.g > 0.4 && c.g < 0.8, `g=${c.g}`)
-  assert.ok(c.b > 0.2 && c.b < 0.6, `b=${c.b}`)
+  assert.ok(c.g > 0.4 && c.g < 0.85, `g=${c.g}`)
+  assert.ok(c.b > 0.2 && c.b < 0.8, `b=${c.b}`)
   assert.equal(c.a, 1)
 })
 
-test("doughColorComponents: fresh dough has higher R than B", () => {
+test("doughColorComponents: dark dough has higher R than B", () => {
   const c = DS.doughColorComponents(makeState({
-    volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(),
+    volume: 0.5, bubbles: 0, lastFed: new Date().toISOString(),
     created: daysAgoIso(7)
   }))
   assert.ok(c.r > c.b, `r=${c.r} should be > b=${c.b}`)
@@ -764,14 +788,14 @@ test("doughColorComponents returns transparent when volume is 0", () => {
   assert.equal(c.a, 0)
 })
 
-test("doughColorComponents returns beige for fresh dough", () => {
+test("doughColorComponents returns white for fresh dough", () => {
   const c = DS.doughColorComponents(makeState({
     volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(),
     created: daysAgoIso(7)
   }))
-  assert.ok(c.r > 0.8, `r=${c.r}`)
-  assert.ok(c.g > 0.7, `g=${c.g}`)
-  assert.ok(c.b > 0.5, `b=${c.b}`)
+  assert.equal(c.r, 1)
+  assert.equal(c.g, 1)
+  assert.equal(c.b, 1)
   assert.equal(c.a, 1)
 })
 
