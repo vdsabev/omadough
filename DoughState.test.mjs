@@ -564,14 +564,14 @@ test("aliveText says 'started: today' on day 0", () => {
   assert.equal(DS.aliveText(s), "started: today")
 })
 
-test("aliveText says '1 day old' on day 1", () => {
+test("aliveText says '1 day ago' on day 1", () => {
   const s = makeState({ volume: 0.5, created: new Date(Date.now() - DAY).toISOString() })
-  assert.equal(DS.aliveText(s), "1 day old")
+  assert.equal(DS.aliveText(s), "1 day ago")
 })
 
-test("aliveText says 'N days old' for N >= 2", () => {
+test("aliveText says 'N days ago' for N >= 2", () => {
   const s = makeState({ volume: 0.5, created: new Date(Date.now() - 5 * DAY).toISOString() })
-  assert.equal(DS.aliveText(s), "5 days old")
+  assert.equal(DS.aliveText(s), "5 days ago")
 })
 
 test("ripenessLabel is empty when the jar is empty", () => {

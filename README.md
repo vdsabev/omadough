@@ -65,3 +65,19 @@ rm ~/.local/bin/omadough
 ```bash
 node --test DoughState.test.mjs
 ```
+
+# TODO
+
+## Vacation Mode
+
+Put the starter in the fridge to keep it alive while you're away for a longer stretch of time.
+
+- Only once your sourdough is ripe
+- Toggle fridge on/off from the popup
+- While refrigerated, health reduces much more slowly when neglected
+- Cannot refeed while in the fridge — you must take it out first, and can't put it back in the fridge for a week
+- Visual indicator on the jar:
+	- no gas
+	- no bubble movement
+	- ice particles
+	- blue tint

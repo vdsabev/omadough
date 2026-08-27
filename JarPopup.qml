@@ -213,8 +213,8 @@ PanelWindow {
                 root.clock
                 var days = DoughState.daysSince(root.doughState.created)
                 if (days === 0) return "today"
-                if (days === 1) return "1 day old"
-                return days + " days old"
+                if (days === 1) return "1 day ago"
+                return days + " days ago"
               }
               color: Qt.darker(Color.foreground, 1.5)
               font.family: Style.font.family
@@ -243,6 +243,28 @@ PanelWindow {
                 height: parent.height
                 color: Color.accent
               }
+            }
+
+            Text {
+              Layout.row: 3
+              Layout.column: 0
+              text: "baked:"
+              color: Qt.darker(Color.foreground, 1.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              Layout.row: 3
+              Layout.column: 1
+              Layout.fillWidth: true
+              text: {
+                var n = (root.doughState.loaves && root.doughState.loaves.length) || 0
+                if (n === 1) return "1 loaf"
+                return n + " loaves"
+              }
+              color: Qt.darker(Color.foreground, 1.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
             }
           }
 

@@ -257,8 +257,8 @@ function aliveText(state) {
   if (state.volume === 0) return ""
   var days = daysSince(state.created)
   if (days === 0) return "started: today"
-  if (days === 1) return "1 day old"
-  return days + " days old"
+  if (days === 1) return "1 day ago"
+  return days + " days ago"
 }
 
 function ripenessLabel(state) {
