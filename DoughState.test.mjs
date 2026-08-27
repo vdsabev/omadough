@@ -10,6 +10,7 @@ const DS = loadLib("./DoughState.js", [
   "canFeed", "canStart", "canBake", "showFeed", "feedButtonText",
   "feed", "startJar", "bake", "advanceDay", "isDead",
   "aliveText", "ripenessLabel", "statusText", "doughColorComponents",
+  "formatFeedClock", "nextFeedHint",
   "health", "displayBubbles", "displayDarkness", "persistFields"
 ])
 
@@ -281,7 +282,7 @@ test("feedButtonText names an out-of-window feed instead of blocking it", () => 
   }, feedWindowOffset(150)))
   assert.equal(DS.canFeed(s), true)
   assert.equal(DS.inFeedWindow(s), false)
-  assert.equal(DS.feedButtonText(s), "Feed (off-schedule)")
+  assert.equal(DS.feedButtonText(s), "feed")
 })
 
 // ── feed ───────────────────────────────────────────────────
@@ -558,9 +559,9 @@ test("aliveText is empty when volume is 0", () => {
   assert.equal(DS.aliveText(makeState()), "")
 })
 
-test("aliveText says 'Born today' on day 0", () => {
+test("aliveText says 'started: today' on day 0", () => {
   const s = makeState({ volume: 0.5, created: new Date().toISOString() })
-  assert.equal(DS.aliveText(s), "Born today")
+  assert.equal(DS.aliveText(s), "started: today")
 })
 
 test("aliveText says '1 day old' on day 1", () => {
@@ -605,12 +606,12 @@ function outsideFeedWindow(overrides = {}) {
 }
 
 test("statusText: empty jar", () => {
-  assert.match(DS.statusText(makeState()), /Empty jar/)
+  assert.match(DS.statusText(makeState()), /empty jar/)
 })
 
 test("statusText: baked flag does not override a live starter", () => {
   const s = makeState({ volume: 0.5, bubbles: 1, baked: true, lastFed: new Date().toISOString() })
-  assert.match(DS.statusText(s), /Fed today/)
+  assert.match(DS.statusText(s), /happy sourdough/)
 })
 
 test("statusText: dead", () => {
@@ -624,12 +625,12 @@ test("statusText: time to feed (in window, not fed today)", () => {
     volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 2 * DAY).toISOString()
   }, feedWindowOffset(0)))
-  assert.match(DS.statusText(s), /Time to feed/)
+  assert.match(DS.statusText(s), /feeding time/)
 })
 
 test("statusText: fed today", () => {
   const s = makeState({ volume: 0.5, bubbles: 1, lastFed: new Date().toISOString() })
-  assert.match(DS.statusText(s), /Fed today/)
+  assert.match(DS.statusText(s), /happy sourdough/)
 })
 
 test("statusText: hungry (> 24h since feed)", () => {
@@ -637,7 +638,7 @@ test("statusText: hungry (> 24h since feed)", () => {
     volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
   })
-  assert.match(DS.statusText(s), /Hungry/)
+  assert.match(DS.statusText(s), /hungry/)
 })
 
 test("statusText: could use a feeding and happy starter are unreachable (fedToday precedes hours check)", () => {
@@ -648,13 +649,13 @@ test("statusText: could use a feeding and happy starter are unreachable (fedToda
     volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
   })
-  assert.match(DS.statusText(s1), /Hungry/)
+  assert.match(DS.statusText(s1), /hungry/)
 
   const s2 = outsideFeedWindow({
     volume: 0.5, bubbles: 1,
     lastFed: new Date(Date.now() - 24.5 * HOUR).toISOString()
   })
-  assert.match(DS.statusText(s2), /Hungry/)
+  assert.match(DS.statusText(s2), /hungry/)
 })
 
 // ── inFeedWindow (edge cases) ──────────────────────────────
@@ -741,12 +742,42 @@ test("statusText: dead is not hidden by baked flag", () => {
   assert.match(DS.statusText(s), /died/)
 })
 
+test("formatFeedClock: 10:03", () => {
+  assert.equal(DS.formatFeedClock(makeState({ feedWindowMinutes: 10 * 60 + 3 })), "10:03")
+})
+
+test("formatFeedClock: midnight", () => {
+  assert.equal(DS.formatFeedClock(makeState({ feedWindowMinutes: 0 })), "0:00")
+})
+
+test("nextFeedHint: empty jar", () => {
+  assert.equal(DS.nextFeedHint(makeState()), "")
+})
+
+test("nextFeedHint: after feeding today", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 1,
+    lastFed: new Date().toISOString(),
+    feedWindowMinutes: 10 * 60 + 3
+  })
+  assert.equal(DS.nextFeedHint(s), "feed again tomorrow around 10:03")
+})
+
+test("nextFeedHint: not yet fed today", () => {
+  const s = makeState({
+    volume: 0.5, bubbles: 1,
+    lastFed: new Date(Date.now() - DAY).toISOString(),
+    feedWindowMinutes: 10 * 60 + 3
+  })
+  assert.equal(DS.nextFeedHint(s), "around 10:03")
+})
+
 test("statusText: fed today takes priority over inFeedWindow", () => {
   const s = makeState(Object.assign({
     volume: 0.5, bubbles: 1,
     lastFed: new Date().toISOString()
   }, feedWindowOffset(0)))
-  assert.match(DS.statusText(s), /Fed today/)
+  assert.match(DS.statusText(s), /happy sourdough/)
 })
 
 // ── doughColorComponents (edge cases) ─────────────────────

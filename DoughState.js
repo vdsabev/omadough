@@ -189,9 +189,21 @@ function showFeed(state) {
 }
 
 function feedButtonText(state) {
-  if (!canFeed(state)) return "Already fed"
-  if (inFeedWindow(state)) return "Feed Now"
-  return "Feed (off-schedule)"
+  if (!canFeed(state)) return "already fed"
+  if (inFeedWindow(state)) return "feed now"
+  return "feed"
+}
+
+function formatFeedClock(state) {
+  var m = ((windowMinutes(state) % 1440) + 1440) % 1440
+  return Math.floor(m / 60) + ":" + pad(m % 60)
+}
+
+function nextFeedHint(state) {
+  if (state.volume === 0 || isDead(state)) return ""
+  var t = formatFeedClock(state)
+  if (fedToday(state)) return "feed again tomorrow around " + t
+  return "around " + t
 }
 
 function feed(state) {
@@ -244,7 +256,7 @@ function isDead(state) {
 function aliveText(state) {
   if (state.volume === 0) return ""
   var days = daysSince(state.created)
-  if (days === 0) return "Born today"
+  if (days === 0) return "started: today"
   if (days === 1) return "1 day old"
   return days + " days old"
 }
@@ -257,14 +269,28 @@ function ripenessLabel(state) {
 }
 
 function statusText(state) {
-  if (state.volume === 0) return "Empty jar — start your starter!"
-  if (isDead(state)) return "Your starter has died. Start over."
-  if (inFeedWindow(state) && !fedToday(state)) return "Time to feed!"
-  if (fedToday(state)) return "Fed today \u2713"
+  if (state.volume === 0) {
+    return "🫙 empty jar - start your sourdough!"
+  }
+
+  if (isDead(state)) {
+    return "💀 your sourdough has died - start over?"
+  }
+
+  if (inFeedWindow(state) && !fedToday(state)) {
+    return "⏰ feeding time!"
+  }
+
   var hours = hoursSince(state.lastFed)
-  if (hours > 24) return "Hungry! Feed soon."
-  if (hours > 12) return "Could use a feeding."
-  return "Happy starter"
+  if (hours > 24) {
+    return "🍽 hungry - feed soon!"
+  }
+
+  if (hours > 12) {
+    return "🫧 could use a feeding…"
+  }
+
+  return "🫧 happy sourdough!"
 }
 
 function doughColorComponents(state) {

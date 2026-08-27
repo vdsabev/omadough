@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Wayland
@@ -12,8 +13,8 @@ PanelWindow {
   required property Item anchorItem
   required property QtObject bar
   property bool open: false
-  property int contentWidth: Style.space(280)
-  property int contentHeight: contentCol.implicitHeight + Style.space(40)
+  property int contentWidth: contentRow.implicitWidth + Style.space(32)
+  property int contentHeight: contentRow.implicitHeight + Style.space(40)
   property int padding: Style.spacing.popupPadding
   property int gap: Style.gapsOut
 
@@ -130,18 +131,18 @@ PanelWindow {
       onCloseRequested: root.closeRequested()
       onActivateRequested: root.closeRequested()
 
-      Column {
-        id: contentCol
+      Row {
+        id: contentRow
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: card.contentTopInset
-        width: parent.width - Style.space(16)
-        spacing: Style.space(12)
+        spacing: Style.space(16)
+        layoutDirection: Qt.RightToLeft
 
         Jar {
-          anchors.horizontalCenter: parent.horizontalCenter
           width: 96
           height: 144
+          anchors.verticalCenter: parent.verticalCenter
           volume: root.doughState.volume || 0
           bubbles: { root.clock; return DoughState.displayBubbles(root.doughState) }
           darkness: { root.clock; return DoughState.displayDarkness(root.doughState) }
@@ -153,166 +154,214 @@ PanelWindow {
           }
         }
 
-        Text {
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          text: root.statusMsg
-          color: root.feedable ? Color.accent : Color.foreground
-          font.family: Style.font.family
-          font.pixelSize: Style.font.body
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          text: root.aliveMsg
-          visible: root.aliveMsg.length > 0
-          color: Qt.darker(Color.foreground, 1.5)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-        }
-
-        Text {
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          text: {
-            root.clock
-            var label = DoughState.ripenessLabel(root.doughState)
-            return label.length > 0 ? "Ripeness " + label : ""
-          }
-          visible: text.length > 0
-          color: Qt.darker(Color.foreground, 1.5)
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-        }
-
-        Row {
-          anchors.horizontalCenter: parent.horizontalCenter
-          spacing: Style.space(6)
-          visible: root.doughState.volume > 0
+        Column {
+          id: sideCol
+          width: Style.space(200)
+          spacing: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
 
           Text {
-            text: "Health"
-            color: Qt.darker(Color.foreground, 1.5)
+            width: parent.width
+            text: root.statusMsg
+            color: root.feedable ? Color.accent : Color.foreground
             font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            anchors.verticalCenter: parent.verticalCenter
+            font.pixelSize: Style.font.body
+            wrapMode: Text.WordWrap
           }
 
-          Rectangle {
-            width: 96
-            height: 8
-            color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
-            anchors.verticalCenter: parent.verticalCenter
+          GridLayout {
+            width: parent.width
+            columns: 2
+            columnSpacing: Style.space(8)
+            rowSpacing: Style.space(6)
+            visible: root.doughState.volume > 0
 
+            Text {
+              Layout.row: 0
+              Layout.column: 0
+              visible: ripeText.text.length > 0
+              text: "ripeness:"
+              color: Qt.darker(Color.foreground, 1.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              id: ripeText
+              Layout.row: 0
+              Layout.column: 1
+              Layout.fillWidth: true
+              visible: text.length > 0
+              text: {
+                root.clock
+                return DoughState.ripenessLabel(root.doughState)
+              }
+              color: Qt.darker(Color.foreground, 1.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              Layout.row: 1
+              Layout.column: 0
+              text: "started:"
+              color: Qt.darker(Color.foreground, 1.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              Layout.row: 1
+              Layout.column: 1
+              Layout.fillWidth: true
+              text: {
+                root.clock
+                var days = DoughState.daysSince(root.doughState.created)
+                if (days === 0) return "today"
+                if (days === 1) return "1 day old"
+                return days + " days old"
+              }
+              color: Qt.darker(Color.foreground, 1.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              Layout.row: 2
+              Layout.column: 0
+              text: "health:"
+              color: Qt.darker(Color.foreground, 1.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              Layout.alignment: Qt.AlignVCenter
+            }
             Rectangle {
-              width: { root.clock; return Math.round(24 * DoughState.health(root.doughState)) * 4 }
-              height: parent.height
-              color: Color.accent
+              Layout.row: 2
+              Layout.column: 1
+              Layout.fillWidth: true
+              Layout.preferredHeight: 8
+              Layout.alignment: Qt.AlignVCenter
+              color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
+
+              Rectangle {
+                width: { root.clock; return Math.round(parent.width * DoughState.health(root.doughState) / 4) * 4 }
+                height: parent.height
+                color: Color.accent
+              }
             }
           }
-        }
 
-        // Action buttons
-        Rectangle {
-          anchors.horizontalCenter: parent.horizontalCenter
-          width: buttonRow.implicitWidth + Style.space(24)
-          height: 36
-          radius: Style.cornerRadius
-          color: Color.accent
-          visible: root.startable
-          opacity: startMouse.containsMouse ? 0.85 : 1
+          Flow {
+            width: parent.width
+            spacing: Style.space(8)
+
+            Rectangle {
+              width: startLabel.implicitWidth + Style.space(24)
+              height: 36
+              radius: Style.cornerRadius
+              color: Color.accent
+              visible: root.startable
+              opacity: startMouse.containsMouse ? 0.85 : 1
+
+              Text {
+                id: startLabel
+                anchors.centerIn: parent
+                text: "start jar"
+                color: Color.background
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              MouseArea {
+                id: startMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.startRequested()
+              }
+            }
+
+            Column {
+              spacing: Style.space(4)
+              visible: DoughState.showFeed(root.doughState)
+
+              Rectangle {
+                width: feedLabel.implicitWidth + Style.space(24)
+                height: 36
+                radius: Style.cornerRadius
+                visible: root.feedable
+                color: Color.accent
+                opacity: feedMouse.containsMouse ? 0.85 : 1
+
+                Text {
+                  id: feedLabel
+                  anchors.centerIn: parent
+                  text: DoughState.feedButtonText(root.doughState)
+                  color: Color.background
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.body
+                }
+
+                MouseArea {
+                  id: feedMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.feedRequested()
+                }
+              }
+
+              Text {
+                width: Math.min(sideCol.width, implicitWidth)
+                wrapMode: Text.WordWrap
+                text: DoughState.nextFeedHint(root.doughState)
+                visible: text.length > 0
+                color: Qt.darker(Color.foreground, 1.5)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Rectangle {
+              width: bakeLabel.implicitWidth + Style.space(24)
+              height: 36
+              radius: Style.cornerRadius
+              color: Color.accent
+              visible: root.bakeable
+              opacity: bakeMouse.containsMouse ? 0.85 : 1
+
+              Text {
+                id: bakeLabel
+                anchors.centerIn: parent
+                text: "bake bread!"
+                color: Color.background
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              MouseArea {
+                id: bakeMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.bakeRequested()
+              }
+            }
+          }
 
           Text {
-            id: buttonRow
-            anchors.centerIn: parent
-            text: "Start Jar"
-            color: Color.background
+            width: parent.width
+            text: "your starter died. click to restart."
+            visible: root.dead
+            wrapMode: Text.WordWrap
+            color: Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.body
-            font.weight: Font.DemiBold
-          }
 
-          MouseArea {
-            id: startMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.startRequested()
-          }
-        }
-
-        Rectangle {
-          anchors.horizontalCenter: parent.horizontalCenter
-          width: feedRow.implicitWidth + Style.space(24)
-          height: 36
-          radius: Style.cornerRadius
-          color: root.feedable ? Color.accent : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.12)
-          visible: DoughState.showFeed(root.doughState)
-          opacity: root.feedable ? (feedMouse.containsMouse ? 0.85 : 1) : 0.5
-
-          Text {
-            id: feedRow
-            anchors.centerIn: parent
-            text: DoughState.feedButtonText(root.doughState)
-            color: root.feedable ? Color.background : Qt.darker(Color.foreground, 1.5)
-            font.family: Style.font.family
-            font.pixelSize: Style.font.body
-            font.weight: Font.DemiBold
-          }
-
-          MouseArea {
-            id: feedMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: root.feedable ? Qt.PointingHandCursor : Qt.ArrowCursor
-            enabled: root.feedable
-            onClicked: root.feedRequested()
-          }
-        }
-
-        Rectangle {
-          anchors.horizontalCenter: parent.horizontalCenter
-          width: bakeRow.implicitWidth + Style.space(24)
-          height: 36
-          radius: Style.cornerRadius
-          color: Color.accent
-          visible: root.bakeable
-          opacity: bakeMouse.containsMouse ? 0.85 : 1
-
-          Text {
-            id: bakeRow
-            anchors.centerIn: parent
-            text: "Bake Bread!"
-            color: Color.background
-            font.family: Style.font.family
-            font.pixelSize: Style.font.body
-            font.weight: Font.DemiBold
-          }
-
-          MouseArea {
-            id: bakeMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.bakeRequested()
-          }
-        }
-
-        Text {
-          anchors.horizontalCenter: parent.horizontalCenter
-          text: "Your starter died. Click to restart."
-          visible: root.dead
-          color: Color.accent
-          font.family: Style.font.family
-          font.pixelSize: Style.font.body
-
-          MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.startRequested()
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.startRequested()
+            }
           }
         }
       }
