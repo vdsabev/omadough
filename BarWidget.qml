@@ -90,7 +90,7 @@ Panel {
     id: hit
     anchors.fill: parent
     bar: root.bar
-    tooltipText: root.statusMsg || "OmàDough"
+    tooltipText: root.statusMsg || "Omadough"
 
     iconComponent: Component {
       Jar {
@@ -111,7 +111,7 @@ Panel {
     onPressed: function(button) {
       if (button === Qt.RightButton) {
         if (root.bar)
-          root.bar.showTooltip(hit, root.statusMsg || "OmàDough")
+          root.bar.showTooltip(hit, root.statusMsg || "Omadough")
         return
       }
       root.toggle()

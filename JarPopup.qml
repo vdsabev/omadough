@@ -328,7 +328,7 @@ PanelWindow {
               Text {
                 id: bakeLabel
                 anchors.centerIn: parent
-                text: "bake bread!"
+                text: "bake bread"
                 color: Color.background
                 font.family: Style.font.family
                 font.pixelSize: Style.font.body

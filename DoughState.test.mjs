@@ -641,21 +641,36 @@ test("statusText: hungry (> 24h since feed)", () => {
   assert.match(DS.statusText(s), /hungry/)
 })
 
-test("statusText: could use a feeding and happy starter are unreachable (fedToday precedes hours check)", () => {
-  // These statuses require hoursSince(lastFed) in (0,24] with fedToday=false,
-  // but fedToday is false only when lastFed is a different day (hoursSince >= 24).
-  // The hours-based branches are dead code in the current priority chain.
-  const s1 = outsideFeedWindow({
-    volume: 0.5, bubbles: 1,
+test("statusText: low health is dark even if recently fed", () => {
+  const s = makeState({
+    volume: 1, bubbles: 0.2, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  })
+  assert.match(DS.statusText(s), /looking tired/)
+})
+
+test("statusText: very low health is hanging on", () => {
+  const s = makeState({
+    volume: 1, bubbles: 0.1, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  })
+  assert.match(DS.statusText(s), /hanging on/)
+})
+
+test("statusText: mid health is sluggish", () => {
+  const s = makeState({
+    volume: 1, bubbles: 0.5, lastFed: new Date().toISOString(),
+    created: daysAgoIso(7)
+  })
+  assert.match(DS.statusText(s), /sluggish/)
+})
+
+test("statusText: hungry only when health is still high", () => {
+  const s = outsideFeedWindow({
+    volume: 0.5, bubbles: 0.2,
     lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
   })
-  assert.match(DS.statusText(s1), /hungry/)
-
-  const s2 = outsideFeedWindow({
-    volume: 0.5, bubbles: 1,
-    lastFed: new Date(Date.now() - 24.5 * HOUR).toISOString()
-  })
-  assert.match(DS.statusText(s2), /hungry/)
+  assert.match(DS.statusText(s), /looking tired/)
 })
 
 // ── inFeedWindow (edge cases) ──────────────────────────────

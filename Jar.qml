@@ -73,10 +73,11 @@ Item {
   readonly property bool gasOn: volume > 0 && bubbles > 0.05 && fillTop > bodyTop
   property int tick: 0
   readonly property int gasPhase: tick % 7
-  readonly property int wobble: tick % 2
   // Frames use col 0..3 relative to origin; row is pinned so peek sits on the dough.
   property int gasRestCol: fillLeft + Math.floor((fillWidth - 5) / 2)
   property int gasRestRow: fillTop - 5
+  property var bubbleCells: []
+  property int fizzGen: 0
 
   function pickGasOrigin() {
     var cmin = fillLeft
@@ -96,11 +97,19 @@ Item {
       root.tick = (root.tick + 1) % 14
       if (root.gasPhase === 0)
         root.pickGasOrigin()
+      root.syncBubbles(true)
     }
   }
 
-  onFillTopChanged: pickGasOrigin()
-  Component.onCompleted: pickGasOrigin()
+  onFillTopChanged: {
+    pickGasOrigin()
+    syncBubbles(false)
+  }
+  onBubbleCountChanged: syncBubbles(false)
+  Component.onCompleted: {
+    pickGasOrigin()
+    syncBubbles(false)
+  }
 
   function isInterior(col, row) {
     return sprite[row].charAt(col) === "." && row >= bodyTop && row <= bodyBottom && col >= fillLeft && col < fillLeft + fillWidth
@@ -110,37 +119,84 @@ Item {
     return col >= fillLeft && col < fillLeft + fillWidth && row >= fillTop && row <= bodyBottom
   }
 
-  function bubbleRestCol(i) {
-    return fillLeft + ((i * 7 + 3) * 13 % fillWidth)
+  function cellKey(c, r) {
+    return r * 32 + c
   }
 
-  function bubbleRestRow(i) {
-    var br = fillTop + ((i * 7 + 3) * 17 % Math.max(1, fillRows))
-    if (br > bodyBottom)
-      return bodyBottom
-    return br
-  }
-
-  // Prefer down-right; if that leaves the dough, try the opposite diagonal, then the other two.
-  function bubbleDelta(i) {
-    if (!wobble)
-      return [0, 0]
-    var c = bubbleRestCol(i)
-    var r = bubbleRestRow(i)
-    var dirs = [[1, 1], [-1, -1], [1, -1], [-1, 1]]
-    for (var d = 0; d < dirs.length; d++) {
-      if (inFill(c + dirs[d][0], r + dirs[d][1]))
-        return dirs[d]
+  function shuffleInPlace(a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1))
+      var t = a[i]
+      a[i] = a[j]
+      a[j] = t
     }
-    return [0, 0]
   }
 
-  function bubbleCol(i) {
-    return bubbleRestCol(i) + bubbleDelta(i)[0]
+  function emptySpot(occ) {
+    var spots = []
+    for (var r = fillTop; r <= bodyBottom; r++) {
+      for (var c = fillLeft; c < fillLeft + fillWidth; c++) {
+        if (inFill(c, r) && occ[cellKey(c, r)] === undefined)
+          spots.push([c, r])
+      }
+    }
+    if (!spots.length)
+      return null
+    return spots[Math.floor(Math.random() * spots.length)]
   }
 
-  function bubbleRow(i) {
-    return bubbleRestRow(i) + bubbleDelta(i)[1]
+  // Exclusion walk: exactly bubbleCount occupied cells, no births or deaths.
+  function syncBubbles(move) {
+    var n = bubbleCount
+    var occ = {}
+    var kept = []
+    var src = bubbleCells
+    for (var i = 0; i < src.length && kept.length < n; i++) {
+      var c = src[i][0]
+      var r = src[i][1]
+      if (!inFill(c, r))
+        continue
+      var k = cellKey(c, r)
+      if (occ[k] !== undefined)
+        continue
+      occ[k] = true
+      kept.push([c, r])
+    }
+    while (kept.length < n) {
+      var p = emptySpot(occ)
+      if (!p)
+        break
+      occ[cellKey(p[0], p[1])] = true
+      kept.push(p)
+    }
+    if (move) {
+      var order = []
+      for (var i = 0; i < kept.length; i++)
+        order.push(i)
+      shuffleInPlace(order)
+      for (var o = 0; o < order.length; o++) {
+        var i = order[o]
+        var c = kept[i][0]
+        var r = kept[i][1]
+        var dirs = [[0, -1], [0, 1], [-1, 0], [1, 0], [1, -1], [-1, 1], [1, 1], [-1, -1]]
+        shuffleInPlace(dirs)
+        for (var d = 0; d < dirs.length; d++) {
+          var nc = c + dirs[d][0]
+          var nr = r + dirs[d][1]
+          if (!inFill(nc, nr))
+            continue
+          var nk = cellKey(nc, nr)
+          if (occ[nk] !== undefined)
+            continue
+          delete occ[cellKey(c, r)]
+          occ[nk] = true
+          kept[i] = [nc, nr]
+          break
+        }
+      }
+    }
+    bubbleCells = kept
+    fizzGen++
   }
 
   function paint(col, row) {
@@ -187,8 +243,20 @@ Item {
 
       Rectangle {
         required property int index
-        x: { root.wobble; return root.px * root.bubbleCol(index) }
-        y: { root.wobble; return root.px * root.bubbleRow(index) }
+        x: {
+          root.fizzGen
+          var p = root.bubbleCells[index]
+          return root.px * (p ? p[0] : 0)
+        }
+        y: {
+          root.fizzGen
+          var p = root.bubbleCells[index]
+          return root.px * (p ? p[1] : 0)
+        }
+        visible: {
+          root.fizzGen
+          return !!root.bubbleCells[index]
+        }
         width: root.px
         height: root.px
         color: root.bubbleColor

@@ -281,16 +281,16 @@ function statusText(state) {
     return "⏰ feeding time!"
   }
 
+  var h = health(state)
   var hours = hoursSince(state.lastFed)
-  if (hours > 24) {
+  if (hours > 24 && h >= 0.7) {
     return "🍽 hungry - feed soon!"
   }
 
-  if (hours > 12) {
-    return "🫧 could use a feeding…"
-  }
-
-  return "🫧 happy sourdough!"
+  if (h >= 0.7) return "😊 happy sourdough!"
+  if (h >= 0.4) return "😐 a little sluggish…"
+  if (h >= 0.2) return "😩 looking tired…"
+  return "😫 hanging on by a thread…"
 }
 
 function doughColorComponents(state) {
