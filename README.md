@@ -26,7 +26,7 @@ omarchy plugin enable vdsabev.omadough
 - Bake once the dough ripens and is in good health. Baking takes out some of the volume.
 - If you use up all the dough or it dies you have to start a new one!
 
-You can also feed your jar from the terminal. `node` must be on `PATH`. After installing the plugin:
+You can also feed your jar from the terminal. After installing the plugin:
 
 ```bash
 ln -sfn ~/.config/omarchy/plugins/vdsabev.omadough/bin/omadough ~/.local/bin/omadough
@@ -40,7 +40,7 @@ omadough bake
 omadough help
 ```
 
-State lives in `~/.config/omadough/state.json`. The bar re-reads it every minute and again before every action it takes, so CLI and widget share one culture.
+State lives in `~/.config/omadough/state.json`. The bar re-reads it when you open the popup, hourly, and before every action it takes, so CLI and widget share one culture.
 
 ## Remove
 
@@ -58,6 +58,7 @@ rm ~/.local/bin/omadough
 ## Dependencies
 
 - Omarchy Quattro (`omarchy-shell` / Quickshell)
+- `python3` — the widget and the CLI both read and write the state file through `bin/omadough-state`
 - `node` — required for `omadough` on the console / SSH
 
 ## Tests

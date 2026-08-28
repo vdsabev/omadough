@@ -1,52 +1,247 @@
-#!/usr/bin/env bash
-# The only path by which the QML widget touches the state file.
-#
-#   omadough-state read  <path>   state JSON on stdout
-#   omadough-state write <path>   state JSON on stdin
-#
-# Exit 10 means "no state yet" and is the only code that lets a caller seed
-# defaults; it is outside the range bash uses for its own failures. Exit 3 is a
-# path we refuse to touch, and the caller must leave it alone.
-set -euo pipefail
+#!/usr/bin/env python3
+"""The only path by which the QML widget touches the state file.
 
-MAX_BYTES=1048576
+    omadough-state read  <path>   state JSON on stdout
+    omadough-state write <path>   state JSON on stdin
 
-die() {
-  echo "omadough-state: $1" >&2
-  exit "$2"
-}
+Exit 10 means "no state yet" and is the only code that lets a caller seed
+defaults. Exit 3 means this run did not touch the file: either the path is one
+we refuse, or the I/O failed. Retrying later is fine; writing anyway is not.
+Exit 64 is bad usage.
 
-read_state() {
-  local path="$1" size
-  [ -e "$path" ] || [ -L "$path" ] || exit 10
-  # lstat, so a symlink or FIFO is rejected rather than resolved.
-  find "$path" -maxdepth 0 -type f -print -quit 2>/dev/null | grep -q . \
-    || die "not a regular file: $path" 3
-  size=$(stat -c %s -- "$path")
-  [ "$size" -gt 0 ] || die "empty state file: $path" 3
-  [ "$size" -le "$MAX_BYTES" ] || die "state file is too large ($size bytes): $path" 3
-  # nofollow/nonblock cannot be defeated by swapping the path after the checks
-  # above, and count caps a file still growing during the read.
-  dd if="$path" iflag=nofollow,nonblock,count_bytes count="$MAX_BYTES" bs=65536 status=none
-}
+Every directory in the path is opened once and everything after that happens
+relative to the held descriptor, so exchanging a directory for a symlink after
+the checks cannot redirect the file we create or publish. A symlinked component
+is resolved one hop at a time rather than by the kernel, so that the owner check
+applies to every directory the walk passes through.
+"""
 
-write_state() {
-  local path="$1" dir tmp size
-  dir=$(dirname -- "$path")
-  mkdir -p -- "$dir"
-  # mktemp: same directory, O_EXCL, mode 0600.
-  tmp=$(mktemp -- "$dir/.state.XXXXXXXX")
-  trap 'rm -f -- "$tmp"' EXIT INT TERM HUP
-  head -c "$((MAX_BYTES + 1))" > "$tmp"
-  size=$(stat -c %s -- "$tmp")
-  [ "$size" -le "$MAX_BYTES" ] || die "refusing to write more than $MAX_BYTES bytes" 3
-  [ "$size" -gt 0 ] || die "refusing to write an empty state file" 3
-  mv -fT -- "$tmp" "$path"
-  trap - EXIT INT TERM HUP
-}
+import errno
+import os
+import signal
+import stat
+import sys
 
-case "${1:-}" in
-  read) [ $# -eq 2 ] || die "usage: omadough-state read <path>" 64; read_state "$2" ;;
-  write) [ $# -eq 2 ] || die "usage: omadough-state write <path>" 64; write_state "$2" ;;
-  *) die "usage: omadough-state read|write <path>" 64 ;;
-esac
+MAX_BYTES = 1 << 20
+MAX_HOPS = 16
+MAX_RETRIES = 8
+EXIT_REFUSED = 3
+EXIT_MISSING = 10
+EXIT_USAGE = 64
+
+EUID = os.geteuid()
+
+
+def die(message, code):
+    print(f"omadough-state: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def check_dir(fd, path, final):
+    """A directory we are willing to hold. Anything writable by someone who is
+    not the owner could be exchanged under us, so a shared directory is only
+    acceptable above the state directory and only when sticky.
+
+    A 0775 home directory therefore fails, which is intended: we cannot tell a
+    private user group from a shared one. The message says how to get out of it.
+    """
+    st = os.fstat(fd)
+    if final:
+        if st.st_uid != EUID:
+            die(f"directory is not owned by uid {EUID}: {path}", EXIT_REFUSED)
+        if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            die(f"chmod go-w {path} — a state directory others can write to "
+                "can be swapped under us", EXIT_REFUSED)
+        return
+    if st.st_uid not in (0, EUID):
+        die(f"directory is owned by neither root nor uid {EUID}: {path}", EXIT_REFUSED)
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) and not st.st_mode & stat.S_ISVTX:
+        die(f"chmod go-w {path} — a directory on the way to the state file that "
+            "others can write to can be swapped under us", EXIT_REFUSED)
+
+
+def open_dir(path, create):
+    """Walk the path one component at a time from the root and return a
+    descriptor for the final directory."""
+    if not os.path.isabs(path):
+        die(f"not an absolute path: {path}", EXIT_USAGE)
+    pending = [c for c in path.split("/") if c]
+    if not pending:
+        die("refusing to use the root directory as the state directory", EXIT_REFUSED)
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    walked = "/"
+    hops = 0
+    try:
+        while pending:
+            name = pending.pop(0)
+            walked = os.path.normpath(os.path.join(walked, name))
+            nxt = open_component(fd, name, walked, create)
+            if nxt is None:
+                hops += 1
+                if hops > MAX_HOPS:
+                    die(f"too many symlinks to follow: {walked}", EXIT_REFUSED)
+                target = os.readlink(name, dir_fd=fd)
+                if os.path.isabs(target):
+                    root = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+                    os.close(fd)
+                    fd = root
+                    walked = "/"
+                else:
+                    walked = os.path.dirname(walked)
+                pending = [c for c in target.split("/") if c] + pending
+                continue
+            os.close(fd)
+            fd = nxt
+            if pending:
+                check_dir(fd, walked, final=False)
+        # Outside the loop, so a symlink hop that lands on the last component
+        # cannot slip past this.
+        check_dir(fd, walked, final=True)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def open_component(dfd, name, path, create):
+    """A descriptor for `name` inside `dfd`, or None when `name` is a symlink
+    and the caller has to resolve the hop itself."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    for _ in range(MAX_RETRIES):
+        try:
+            return os.open(name, flags, dir_fd=dfd)
+        except FileNotFoundError:
+            if not create:
+                raise SystemExit(EXIT_MISSING)
+            try:
+                os.mkdir(name, 0o700, dir_fd=dfd)
+            except FileExistsError:
+                pass  # another writer got there first; open what is there now
+        except OSError as e:
+            # Linux reports a symlink as ENOTDIR, not ELOOP, once O_DIRECTORY
+            # is in the flags, so ask what the name really is.
+            if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                if stat.S_ISLNK(os.stat(name, dir_fd=dfd, follow_symlinks=False).st_mode):
+                    return None
+                die(f"not a directory: {path}", EXIT_REFUSED)
+            raise
+    die(f"keeps disappearing while we open it: {path}", EXIT_REFUSED)
+
+
+def split_path(path):
+    if not os.path.isabs(path):
+        die(f"not an absolute path: {path}", EXIT_USAGE)
+    directory, name = os.path.split(path)
+    if not name:
+        die(f"not a path to a file: {path}", EXIT_USAGE)
+    return directory, name
+
+
+def read_state(path):
+    directory, name = split_path(path)
+    dfd = open_dir(directory, create=False)
+    try:
+        # NONBLOCK so a FIFO left at this name cannot stall the open.
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        try:
+            fd = os.open(name, flags, dir_fd=dfd)
+        except FileNotFoundError:
+            raise SystemExit(EXIT_MISSING)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                die(f"refusing to follow the symlink at {path}", EXIT_REFUSED)
+            raise
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                die(f"not a regular file: {path}", EXIT_REFUSED)
+            if st.st_uid != EUID:
+                die(f"not owned by uid {EUID}: {path}", EXIT_REFUSED)
+            data = read_capped(fd)
+            # Nothing to protect, and refusing would need a manual delete to
+            # recover from, so let the caller seed defaults over it.
+            if not data:
+                raise SystemExit(EXIT_MISSING)
+            sys.stdout.buffer.write(data)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dfd)
+
+
+def read_capped(fd):
+    """Enforce the ceiling while reading, so a file still growing cannot make
+    us read more than we agreed to."""
+    chunks = []
+    remaining = MAX_BYTES
+    while remaining > 0:
+        chunk = os.read(fd, min(65536, remaining))
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    if os.read(fd, 1):
+        die(f"state file is larger than {MAX_BYTES} bytes", EXIT_REFUSED)
+    return b"".join(chunks)
+
+
+def write_state(path):
+    data = sys.stdin.buffer.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        die(f"refusing to write more than {MAX_BYTES} bytes", EXIT_REFUSED)
+    if not data:
+        die("refusing to write an empty state file", EXIT_REFUSED)
+    directory, name = split_path(path)
+    dfd = open_dir(directory, create=True)
+    try:
+        tmp = f".state.{os.getpid()}.{os.urandom(4).hex()}.tmp"
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=dfd,
+        )
+        try:
+            with os.fdopen(fd, "wb", closefd=True) as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
+        try:
+            os.fsync(dfd)
+        except OSError:
+            # The state is already published. Some network and FUSE mounts
+            # refuse to fsync a directory; that must not read as a failed write.
+            pass
+    finally:
+        os.close(dfd)
+
+
+def main(argv):
+    if len(argv) != 3 or argv[1] not in ("read", "write"):
+        die("usage: omadough-state read|write <path>", EXIT_USAGE)
+    if argv[1] == "read":
+        read_state(argv[2])
+    else:
+        write_state(argv[2])
+
+
+def on_signal(signum, frame):
+    # Turn a kill into an unwind so the temp file gets cleaned up.
+    raise SystemExit(128 + signum)
+
+
+if __name__ == "__main__":
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, on_signal)
+    try:
+        main(sys.argv)
+    except OSError as e:
+        # A traceback here would land in the widget tooltip.
+        die(f"{e.strerror or e}: {e.filename or ''}".strip(), EXIT_REFUSED)

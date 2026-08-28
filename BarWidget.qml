@@ -13,7 +13,6 @@ Panel {
 
   property var dough: DoughState.defaultState()
   property string statusMsg: ""
-  property bool popupOpen: false
   property int clock: 0
 
   readonly property bool verticalBar: bar ? bar.vertical : false
@@ -47,38 +46,70 @@ Panel {
   }
 
   // Writes only ever start from readProc.onExited, so a read can never overlap
-  // one of our own writes and see stale bytes.
+  // one of our own writes and see stale bytes. Dropping a refresh while either
+  // process runs costs nothing: a read in flight is about to publish the state,
+  // and a write publishes what we already hold.
   function startRead() {
     if (readProc.running || writeProc.running)
       return
-    readProc.exec(["bash", root.stateHelper, "read", root.statePath])
+    readProc.exec(["python3", root.stateHelper, "read", root.statePath])
   }
 
   function writeState(state) {
     writeProc.payload = JSON.stringify(DoughState.persistFields(state), null, 2) + "\n"
     writeProc.stdinEnabled = true
-    writeProc.exec(["bash", root.stateHelper, "write", root.statePath])
+    writeProc.exec(["python3", root.stateHelper, "write", root.statePath])
   }
 
+  // The queued mutation is dropped rather than replayed: we do not know whether
+  // a failed write landed, and re-feeding twice is worse than losing one click.
   function fail(msg) {
     root.pendingMutations = []
     root.errorMsg = msg
     root.statusMsg = msg
+    retryTimer.restart()
   }
 
   function refreshStatus() {
     root.statusMsg = root.errorMsg || DoughState.statusText(root.dough)
   }
 
+  // Only a successful read clears errorMsg, and the poll is hourly, so without
+  // this a transient failure would pin the error and a stale jar for an hour.
+  // The interval grows so a permanent failure stops costing a process a minute.
+  Timer {
+    id: retryTimer
+    interval: 15000
+    repeat: false
+    // Backing off before the startRead guard can spend a step without an
+    // attempt, which is fine: the process that blocked it is about to publish
+    // state and clear the error, and the next failure re-arms the timer.
+    onTriggered: {
+      retryTimer.interval = Math.min(retryTimer.interval * 2, 900000)
+      root.startRead()
+    }
+  }
+
+  // Time-derived visuals only; no process, so this stays cheap.
   Timer {
     interval: 60000
     running: true
     repeat: true
     onTriggered: {
       root.clock++
-      root.startRead()
       root.refreshStatus()
     }
+  }
+
+  // Catches edits made by the CLI. Volume and health move by fractions of a
+  // percent per hour, and every action re-reads first, so an hour is enough.
+  // Deliberately not tied to hover: the icon and its tooltip would then spawn a
+  // process every time the pointer crosses the bar.
+  Timer {
+    interval: 3600000
+    running: true
+    repeat: true
+    onTriggered: root.startRead()
   }
 
   Timer {
@@ -102,7 +133,7 @@ Panel {
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode, exitStatus) {
       if (exitStatus !== 0 || (exitCode !== 0 && exitCode !== root.stateMissing)) {
-        root.fail(stderr.text.trim() || "Omadough: cannot read state file")
+        root.fail(stderr.text.trim() || "Omadough: cannot read state file — is python3 installed?")
         return
       }
       var fresh = exitCode === root.stateMissing
@@ -113,6 +144,8 @@ Panel {
       for (var i = 0; i < mutations.length; i++)
         fresh = mutations[i](fresh)
       root.errorMsg = ""
+      retryTimer.stop()
+      retryTimer.interval = 15000
       root.dough = fresh
       root.refreshStatus()
       if (mutations.length > 0 || exitCode === root.stateMissing)
@@ -130,11 +163,17 @@ Panel {
     }
     onExited: function(exitCode, exitStatus) {
       if (exitStatus !== 0 || exitCode !== 0)
-        root.fail(stderr.text.trim() || "Omadough: cannot write state file")
+        root.fail(stderr.text.trim() || "Omadough: cannot write state file — is python3 installed?")
       if (root.pendingMutations.length > 0)
         root.startRead()
     }
   }
+
+  // The hourly poll can leave the view an hour stale, so refresh at the moment
+  // the user actually looks at the jar. The read is asynchronous, so the first
+  // frame can still be stale; a button clicked in that frame is harmless
+  // because every mutation re-reads first and the actions self-guard.
+  onOpenedChanged: if (root.opened) root.startRead()
 
   Component.onCompleted: root.startRead()
 

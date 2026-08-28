@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { spawnSync } from "node:child_process"
+import { join } from "node:path"
 import { homedir } from "node:os"
+import { fileURLToPath } from "node:url"
 import { loadLib } from "./loadLib.mjs"
 
 const DS = loadLib("./DoughState.js", [
@@ -12,8 +13,8 @@ const DS = loadLib("./DoughState.js", [
   "health", "displayBubbles", "displayDarkness"
 ])
 
-const STATE_DIR = join(homedir(), ".config", "omadough")
-const STATE_PATH = join(STATE_DIR, "state.json")
+const STATE_PATH = join(homedir(), ".config", "omadough", "state.json")
+const HELPER = fileURLToPath(new URL("./bin/omadough-state", import.meta.url))
 
 function usage() {
   return `omadough — feed your starter from the console
@@ -27,49 +28,30 @@ Usage:
   omadough help         this text
 
 State: ${STATE_PATH}
-The bar widget re-reads that file every minute.
+The bar widget re-reads that file when its popup opens, and hourly.
 `
 }
 
-const MAX_STATE_BYTES = 1 << 20
+// The helper is the one place that touches the state file; see bin/omadough-state
+// for the guarantees and the exit codes.
+function helper(args, input) {
+  // maxBuffer is left at its 1 MiB default, which the helper's own ceiling can
+  // reach but not exceed; ENOBUFS needs more than the limit, not the limit.
+  const result = spawnSync("python3", [HELPER, ...args, STATE_PATH], { input, encoding: "utf8" })
+  if (result.error) fail(`cannot run ${HELPER}: ${result.error.message}`)
+  return result
+}
 
-// O_NONBLOCK so a FIFO at this path fails fast instead of blocking the open.
 function loadState() {
-  let fd
-  try {
-    fd = openSync(STATE_PATH, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-  } catch (e) {
-    if (e && e.code === "ENOENT") return DS.defaultState()
-    if (e && e.code === "ELOOP") fail(`Refusing to follow a symlink at ${STATE_PATH}`)
-    throw e
-  }
-  try {
-    const st = fstatSync(fd)
-    if (!st.isFile())
-      fail(`Not a regular file: ${STATE_PATH}`)
-    if (st.size > MAX_STATE_BYTES)
-      fail(`State file is too large (${st.size} bytes): ${STATE_PATH}`)
-    return DS.parseState(readFileSync(fd, "utf8"))
-  } finally {
-    closeSync(fd)
-  }
+  const result = helper(["read"])
+  if (result.status === 10) return DS.defaultState()
+  if (result.status !== 0) fail(result.stderr.trim() || `cannot read ${STATE_PATH}`)
+  return DS.parseState(result.stdout)
 }
 
 function saveState(state) {
-  mkdirSync(STATE_DIR, { recursive: true })
-  const tmp = `${STATE_PATH}.${process.pid}.tmp`
-  const text = JSON.stringify(DS.persistFields(state), null, 2) + "\n"
-  // O_EXCL: never write through a name that already exists at the temp path.
-  writeFileSync(tmp, text, {
-    flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    mode: 0o600
-  })
-  try {
-    renameSync(tmp, STATE_PATH)
-  } catch (e) {
-    try { unlinkSync(tmp) } catch {}
-    throw e
-  }
+  const result = helper(["write"], JSON.stringify(DS.persistFields(state), null, 2) + "\n")
+  if (result.status !== 0) fail(result.stderr.trim() || `cannot write ${STATE_PATH}`)
 }
 
 function pct(n) {
