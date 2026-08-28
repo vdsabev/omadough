@@ -40,7 +40,7 @@ omadough bake
 omadough help
 ```
 
-State lives in `~/.config/omadough/state.json`. The bar watches that file, so CLI and widget share one culture. Old saves that used darkness/baked load as dead.
+State lives in `~/.config/omadough/state.json`. The bar re-reads it every minute and again before every action it takes, so CLI and widget share one culture.
 
 ## Remove
 
@@ -67,6 +67,11 @@ node --test DoughState.test.mjs
 ```
 
 # TODO
+
+## Feeding Reminder
+
+- Reminds you at the perfect time to feed your sourdough
+- Can be turned off from within the popup
 
 ## Vacation Mode
 

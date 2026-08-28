@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# The only path by which the QML widget touches the state file.
+#
+#   omadough-state read  <path>   state JSON on stdout
+#   omadough-state write <path>   state JSON on stdin
+#
+# Exit 10 means "no state yet" and is the only code that lets a caller seed
+# defaults; it is outside the range bash uses for its own failures. Exit 3 is a
+# path we refuse to touch, and the caller must leave it alone.
+set -euo pipefail
+
+MAX_BYTES=1048576
+
+die() {
+  echo "omadough-state: $1" >&2
+  exit "$2"
+}
+
+read_state() {
+  local path="$1" size
+  [ -e "$path" ] || [ -L "$path" ] || exit 10
+  # lstat, so a symlink or FIFO is rejected rather than resolved.
+  find "$path" -maxdepth 0 -type f -print -quit 2>/dev/null | grep -q . \
+    || die "not a regular file: $path" 3
+  size=$(stat -c %s -- "$path")
+  [ "$size" -gt 0 ] || die "empty state file: $path" 3
+  [ "$size" -le "$MAX_BYTES" ] || die "state file is too large ($size bytes): $path" 3
+  # nofollow/nonblock cannot be defeated by swapping the path after the checks
+  # above, and count caps a file still growing during the read.
+  dd if="$path" iflag=nofollow,nonblock,count_bytes count="$MAX_BYTES" bs=65536 status=none
+}
+
+write_state() {
+  local path="$1" dir tmp size
+  dir=$(dirname -- "$path")
+  mkdir -p -- "$dir"
+  # mktemp: same directory, O_EXCL, mode 0600.
+  tmp=$(mktemp -- "$dir/.state.XXXXXXXX")
+  trap 'rm -f -- "$tmp"' EXIT INT TERM HUP
+  head -c "$((MAX_BYTES + 1))" > "$tmp"
+  size=$(stat -c %s -- "$tmp")
+  [ "$size" -le "$MAX_BYTES" ] || die "refusing to write more than $MAX_BYTES bytes" 3
+  [ "$size" -gt 0 ] || die "refusing to write an empty state file" 3
+  mv -fT -- "$tmp" "$path"
+  trap - EXIT INT TERM HUP
+}
+
+case "${1:-}" in
+  read) [ $# -eq 2 ] || die "usage: omadough-state read <path>" 64; read_state "$2" ;;
+  write) [ $# -eq 2 ] || die "usage: omadough-state write <path>" 64; write_state "$2" ;;
+  *) die "usage: omadough-state read|write <path>" 64 ;;
+esac

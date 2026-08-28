@@ -27,7 +27,7 @@ Usage:
   omadough help         this text
 
 State: ${STATE_PATH}
-The bar widget reloads that file when it changes.
+The bar widget re-reads that file every minute.
 `
 }
 
@@ -60,7 +60,10 @@ function saveState(state) {
   const tmp = `${STATE_PATH}.${process.pid}.tmp`
   const text = JSON.stringify(DS.persistFields(state), null, 2) + "\n"
   // O_EXCL: never write through a name that already exists at the temp path.
-  writeFileSync(tmp, text, { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW })
+  writeFileSync(tmp, text, {
+    flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    mode: 0o600
+  })
   try {
     renameSync(tmp, STATE_PATH)
   } catch (e) {

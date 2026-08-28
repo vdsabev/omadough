@@ -25,12 +25,49 @@ Panel {
   implicitWidth: verticalBar ? Style.bar.iconSlot : 40
   implicitHeight: verticalBar ? 28 : (bar ? bar.barSize : 26)
 
-  function persistState() {
-    stateFile.setText(JSON.stringify(DoughState.persistFields(root.dough), null, 2))
+  // StandardPaths and Qt.resolvedUrl both hand back file:// URLs; the helper
+  // takes filesystem paths.
+  function urlToPath(url) {
+    return url.toString().replace(/^file:\/\//, "")
+  }
+
+  readonly property string statePath: root.urlToPath(StandardPaths.writableLocation(StandardPaths.HomeLocation)) + "/.config/omadough/state.json"
+  readonly property string stateHelper: root.urlToPath(Qt.resolvedUrl("bin/omadough-state"))
+  readonly property int stateMissing: 10
+
+  // Queued state transitions, each state -> state. They are applied to whatever
+  // the helper just read, never to root.dough, so a stale view cannot overwrite
+  // a change made through the CLI in the meantime.
+  property var pendingMutations: []
+  property string errorMsg: ""
+
+  function mutate(fn) {
+    root.pendingMutations.push(fn)
+    root.startRead()
+  }
+
+  // Writes only ever start from readProc.onExited, so a read can never overlap
+  // one of our own writes and see stale bytes.
+  function startRead() {
+    if (readProc.running || writeProc.running)
+      return
+    readProc.exec(["bash", root.stateHelper, "read", root.statePath])
+  }
+
+  function writeState(state) {
+    writeProc.payload = JSON.stringify(DoughState.persistFields(state), null, 2) + "\n"
+    writeProc.stdinEnabled = true
+    writeProc.exec(["bash", root.stateHelper, "write", root.statePath])
+  }
+
+  function fail(msg) {
+    root.pendingMutations = []
+    root.errorMsg = msg
+    root.statusMsg = msg
   }
 
   function refreshStatus() {
-    root.statusMsg = DoughState.statusText(root.dough)
+    root.statusMsg = root.errorMsg || DoughState.statusText(root.dough)
   }
 
   Timer {
@@ -39,6 +76,7 @@ Panel {
     repeat: true
     onTriggered: {
       root.clock++
+      root.startRead()
       root.refreshStatus()
     }
   }
@@ -51,64 +89,54 @@ Panel {
     property string lastDay: ""
     onTriggered: {
       var today = DoughState.todayKey()
-      if (lastDay !== "" && lastDay !== today) {
-        var next = DoughState.advanceDay(root.dough)
-        if (next !== root.dough) {
-          root.dough = next
-          root.persistState()
-        }
-      }
+      if (lastDay !== "" && lastDay !== today)
+        root.mutate(DoughState.advanceDay)
       lastDay = today
       root.refreshStatus()
     }
   }
 
-  readonly property int maxStateBytes: 1048576
-
-  // Seeding waits for both signals: mkdir must have run, and the load must have
-  // failed with FileNotFound. Any other failure leaves the existing file alone.
-  property bool dirReady: false
-  property bool stateMissing: false
-
-  function seedState() {
-    if (dirReady && stateMissing) {
-      stateMissing = false
-      stateFile.setText(JSON.stringify(DoughState.defaultState(), null, 2))
-    }
-  }
-
-  FileView {
-    id: stateFile
-    path: StandardPaths.writableLocation(StandardPaths.HomeLocation) + "/.config/omadough/state.json"
-    blockLoading: false
-    watchChanges: true
-    onFileChanged: reload()
-    onLoaded: {
-      var raw = typeof text === "function" ? text() : text
-      if (raw.length > root.maxStateBytes) {
-        root.statusMsg = "Omadough: state file is too large"
+  Process {
+    id: readProc
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode, exitStatus) {
+      if (exitStatus !== 0 || (exitCode !== 0 && exitCode !== root.stateMissing)) {
+        root.fail(stderr.text.trim() || "Omadough: cannot read state file")
         return
       }
-      root.dough = DoughState.parseState(raw)
+      var fresh = exitCode === root.stateMissing
+        ? DoughState.defaultState()
+        : DoughState.parseState(stdout.text)
+      var mutations = root.pendingMutations
+      root.pendingMutations = []
+      for (var i = 0; i < mutations.length; i++)
+        fresh = mutations[i](fresh)
+      root.errorMsg = ""
+      root.dough = fresh
       root.refreshStatus()
-    }
-    onLoadFailed: function(error) {
-      if (error === FileViewError.FileNotFound) {
-        root.stateMissing = true
-        root.seedState()
-      }
+      if (mutations.length > 0 || exitCode === root.stateMissing)
+        root.writeState(fresh)
     }
   }
 
   Process {
-    id: ensureDir
-    command: ["mkdir", "-p", StandardPaths.writableLocation(StandardPaths.HomeLocation) + "/.config/omadough"]
-    running: true
-    onExited: {
-      root.dirReady = true
-      root.seedState()
+    id: writeProc
+    property string payload: ""
+    stderr: StdioCollector { waitForEnd: true }
+    onStarted: {
+      write(payload)
+      stdinEnabled = false
+    }
+    onExited: function(exitCode, exitStatus) {
+      if (exitStatus !== 0 || exitCode !== 0)
+        root.fail(stderr.text.trim() || "Omadough: cannot write state file")
+      if (root.pendingMutations.length > 0)
+        root.startRead()
     }
   }
+
+  Component.onCompleted: root.startRead()
 
   BarIconButton {
     id: hit
@@ -156,20 +184,13 @@ Panel {
     startable: DoughState.canStart(root.dough)
     dead: DoughState.isDead(root.dough)
     onCloseRequested: root.close()
-    onFeedRequested: {
-      root.dough = DoughState.feed(root.dough)
-      root.persistState()
-      root.refreshStatus()
-    }
-    onStartRequested: {
-      root.dough = DoughState.startJar(root.dough)
-      root.persistState()
-      root.refreshStatus()
-    }
-    onBakeRequested: {
-      root.dough = DoughState.bake(root.dough)
-      root.persistState()
-      root.refreshStatus()
-    }
+    onFeedRequested: root.mutate(DoughState.feed)
+    onBakeRequested: root.mutate(DoughState.bake)
+    // startJar has no guard of its own, so re-check against the state on disk.
+    onStartRequested: root.mutate(function(state) {
+      return DoughState.canStart(state) || DoughState.isDead(state)
+        ? DoughState.startJar(state)
+        : state
+    })
   }
 }
