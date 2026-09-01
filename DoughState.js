@@ -10,6 +10,13 @@ var DECAY_PER_HOUR = 0.005
 var DARKNESS_DEAD = 1.0
 var BAKE_MIN_BUBBLES = 0.3
 var DEVELOPMENT_DAYS = 7
+var HEALTH_HAPPY = 0.7
+var HEALTH_SLUGGISH = 0.4
+var HEALTH_TIRED = 0.2
+// Hooch is a real substance, not a picture of health: it accrues on the same
+// clock as the decay and takes up room in the jar.
+var HOOCH_PER_HOUR = 0.01
+var HOOCH_MAX = 0.4
 
 function defaultState() {
   var now = new Date()
@@ -18,10 +25,9 @@ function defaultState() {
     lastFed: null,
     volume: 0,
     bubbles: 0,
-    darkness: 0,
-    baked: false,
     feedWindowHour: now.getHours(),
     feedWindowMinutes: now.getHours() * 60 + now.getMinutes(),
+    pouredAt: null,
     loaves: []
   }
 }
@@ -32,32 +38,35 @@ function persistFields(state) {
     lastFed: state.lastFed,
     volume: state.volume,
     bubbles: state.bubbles,
-    darkness: state.darkness,
     feedWindowHour: state.feedWindowHour,
     feedWindowMinutes: state.feedWindowMinutes,
+    pouredAt: state.pouredAt || null,
     loaves: state.loaves || []
   }
 }
 
 function parseState(raw) {
-  var s = defaultState()
+  var s
   try {
     s = JSON.parse(raw)
   } catch (e) {
-    return s
+    s = null
   }
-  if (!s || typeof s !== "object")
-    return s
+  // Every consumer dereferences the result at once, so anything that is not a
+  // state object resets the jar rather than being handed on.
+  if (!s || typeof s !== "object" || Array.isArray(s))
+    return defaultState()
   if (s.created) s.created = String(s.created)
   if (s.lastFed) s.lastFed = String(s.lastFed)
+  s.pouredAt = s.pouredAt ? String(s.pouredAt) : null
   s.volume = clamp(Number(s.volume) || 0, 0, 1)
   s.bubbles = clamp(Number(s.bubbles) || 0, 0, 1)
-  var legacyDead = Number(s.darkness) >= DARKNESS_DEAD || s.baked === true
-  if (legacyDead)
+  // Saves written before health lived in `bubbles` alone recorded death as a full
+  // darkness bar or a `baked` flag. Both are read here and never written again.
+  if (Number(s.darkness) >= DARKNESS_DEAD || s.baked === true)
     writeHealth(s, 0)
-  else
-    s.darkness = 1 - s.bubbles
-  s.baked = false
+  delete s.darkness
+  delete s.baked
   s.feedWindowHour = Number(s.feedWindowHour) || 0
   s.feedWindowMinutes = Number(s.feedWindowMinutes)
   if (isNaN(s.feedWindowMinutes))
@@ -82,6 +91,29 @@ function hoursOverdue(state) {
   return Math.max(0, hoursSince(state.lastFed) - 24 - FEED_WINDOW_HOURS)
 }
 
+// Pouring restarts the hooch clock without counting as a feed, so the jar stops
+// filling but the starter goes on starving.
+function hoochClock(state) {
+  var fed = state.lastFed ? new Date(state.lastFed).getTime() : 0
+  var poured = state.pouredAt ? new Date(state.pouredAt).getTime() : 0
+  return Math.max(fed, poured)
+}
+
+function hooch(state) {
+  if (state.volume === 0) return 0
+  var start = hoochClock(state)
+  if (!start) return 0
+  var hours = (nowMs() - start) / 3600000 - 24 - FEED_WINDOW_HOURS
+  return clamp(hours * HOOCH_PER_HOUR, 0, HOOCH_MAX)
+}
+
+// A jar with room left can always take a feed; only hooch closes it off, so a
+// jar filled to the brim with dough alone stays feedable.
+function jarFull(state) {
+  var h = hooch(state)
+  return h > 0 && state.volume + h >= 1
+}
+
 function health(state) {
   return clamp(state.bubbles - hoursOverdue(state) * DECAY_PER_HOUR, 0, 1)
 }
@@ -96,7 +128,6 @@ function displayDarkness(state) {
 
 function writeHealth(state, value) {
   state.bubbles = clamp(value, 0, 1)
-  state.darkness = 1 - state.bubbles
 }
 
 function setFeedWindowNow(state, now) {
@@ -170,8 +201,28 @@ function fedToday(state) {
     && last.getDate() === now.getDate()
 }
 
+// ── Feed cycle ────────────────────────────────────────────────────────────────
+// Runs only while Alive. Feeding returns it to Fed; the clock carries it through
+// Rested and Due, and past Due into Late.
+
+function healthBand(state) {
+  var h = health(state)
+  if (h >= HEALTH_HAPPY) return "Happy"
+  if (h >= HEALTH_SLUGGISH) return "Sluggish"
+  if (h >= HEALTH_TIRED) return "Tired"
+  return "Failing"
+}
+
+function feedCycle(state) {
+  if (lifecycle(state) !== "Alive") return "None"
+  if (fedToday(state)) return "Fed"
+  if (jarFull(state)) return "Blocked"
+  if (inFeedWindow(state)) return "Due"
+  return hoursSince(state.lastFed) > 24 ? "Late" : "Rested"
+}
+
 function canFeed(state) {
-  return !fedToday(state) && state.volume > 0
+  return lifecycle(state) === "Alive" && !fedToday(state) && !jarFull(state)
 }
 
 function canStart(state) {
@@ -182,10 +233,6 @@ function canBake(state) {
   if (state.volume < VOLUME_PER_FEED) return false
   if (isDead(state)) return false
   return displayBubbles(state) >= BAKE_MIN_BUBBLES
-}
-
-function showFeed(state) {
-  return !canStart(state) && !isDead(state)
 }
 
 function feedButtonText(state) {
@@ -200,9 +247,13 @@ function formatFeedClock(state) {
 }
 
 function nextFeedHint(state) {
-  if (state.volume === 0 || isDead(state)) return ""
+  if (lifecycle(state) !== "Alive") return ""
+  var cycle = feedCycle(state)
+  // A blocked feed is waiting on room, not on the clock, so naming a time reads
+  // as though the jar were merely early.
+  if (cycle === "Blocked") return ""
   var t = formatFeedClock(state)
-  if (fedToday(state)) return "feed again tomorrow around " + t
+  if (cycle === "Fed") return "feed again tomorrow around " + t
   return "around " + t
 }
 
@@ -226,8 +277,8 @@ function startJar(state) {
   state.lastFed = now.toISOString()
   state.volume = 0.1
   writeHealth(state, 1)
-  state.baked = false
   setFeedWindowNow(state, now)
+  state.pouredAt = null
   state.loaves = []
   return state
 }
@@ -245,18 +296,53 @@ function bake(state) {
   return state
 }
 
-function advanceDay(state) {
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
+// Empty → Alive on startJar; Alive → Dead when health reaches zero. Dead is
+// terminal: only startJar leaves it.
+
+function lifecycle(state) {
+  if (state.volume === 0) return "Empty"
+  return health(state) <= 0 ? "Dead" : "Alive"
+}
+
+function canPour(state) {
+  return lifecycle(state) === "Alive" && hooch(state) > 0
+}
+
+function pour(state) {
+  if (!canPour(state)) return state
+  state = JSON.parse(JSON.stringify(state))
+  state.pouredAt = new Date().toISOString()
   return state
 }
 
+// Loaves from before quality was recorded still count, but an unrated loaf is
+// left out of the average rather than dragged in as a zero.
+function loafSummary(state) {
+  var loaves = Array.isArray(state.loaves) ? state.loaves : []
+  if (loaves.length === 0) return "none yet"
+  var total = 0
+  var rated = 0
+  for (var i = 0; i < loaves.length; i++) {
+    var q = Number(loaves[i].quality)
+    if (q > 0) {
+      total += q
+      rated++
+    }
+  }
+  var count = loaves.length + (loaves.length === 1 ? " loaf" : " loaves")
+  if (rated === 0) return count
+  return count + ", avg quality " + Math.round(total / rated * 100) + "%"
+}
+
 function isDead(state) {
-  return state.volume > 0 && health(state) <= 0
+  return lifecycle(state) === "Dead"
 }
 
 function aliveText(state) {
   if (state.volume === 0) return ""
   var days = daysSince(state.created)
-  if (days === 0) return "started: today"
+  if (days === 0) return "today"
   if (days === 1) return "1 day ago"
   return days + " days ago"
 }
@@ -268,29 +354,26 @@ function ripenessLabel(state) {
   return (d + 1) + "/" + DEVELOPMENT_DAYS
 }
 
+var BAND_TEXT = {
+  Happy: "😊 happy sourdough!",
+  Sluggish: "😐 a little sluggish…",
+  Tired: "😩 looking tired…",
+  Failing: "😫 hanging on by a thread…"
+}
+
+// Lifecycle first, then the feed cycle, then the health band: an urgent machine
+// hides the calmer one below it.
 function statusText(state) {
-  if (state.volume === 0) {
-    return "🫙 empty jar - start your sourdough!"
-  }
+  var life = lifecycle(state)
+  if (life === "Empty") return "🫙 empty jar - start your sourdough!"
+  if (life === "Dead") return "💀 your sourdough has died - start over?"
 
-  if (isDead(state)) {
-    return "💀 your sourdough has died - start over?"
-  }
-
-  if (inFeedWindow(state) && !fedToday(state)) {
-    return "⏰ feeding time!"
-  }
-
-  var h = health(state)
-  var hours = hoursSince(state.lastFed)
-  if (hours > 24 && h >= 0.7) {
-    return "🍽 hungry - feed soon!"
-  }
-
-  if (h >= 0.7) return "😊 happy sourdough!"
-  if (h >= 0.4) return "😐 a little sluggish…"
-  if (h >= 0.2) return "😩 looking tired…"
-  return "😫 hanging on by a thread…"
+  var cycle = feedCycle(state)
+  var band = healthBand(state)
+  if (cycle === "Blocked") return "🫗 jar full of hooch - remove it!"
+  if (cycle === "Due") return "⏰ feeding time!"
+  if (cycle === "Late" && band === "Happy") return "🍽 hungry - feed soon!"
+  return BAND_TEXT[band]
 }
 
 function doughColorComponents(state) {

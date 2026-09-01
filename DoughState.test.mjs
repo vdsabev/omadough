@@ -7,11 +7,13 @@ const DS = loadLib("./DoughState.js", [
   "DARKNESS_DEAD",
   "defaultState", "parseState", "clamp", "todayKey", "pad",
   "daysSince", "hoursSince", "inFeedWindow", "fedToday",
-  "canFeed", "canStart", "canBake", "showFeed", "feedButtonText",
-  "feed", "startJar", "bake", "advanceDay", "isDead",
+  "canFeed", "canStart", "canBake", "feedButtonText",
+  "feed", "startJar", "bake", "pour", "canPour", "isDead",
   "aliveText", "ripenessLabel", "statusText", "doughColorComponents",
   "formatFeedClock", "nextFeedHint",
-  "health", "displayBubbles", "displayDarkness", "persistFields"
+  "health", "displayBubbles", "displayDarkness", "persistFields",
+  "lifecycle", "feedCycle", "healthBand", "writeHealth", "loafSummary",
+  "hooch", "jarFull", "HOOCH_MAX"
 ])
 
 const DAY = 86400000
@@ -29,7 +31,6 @@ function bakableState(overrides = {}) {
   return makeState(Object.assign({
     volume: 0.5,
     bubbles: 0.5,
-    darkness: 0.5,
     created: daysAgoIso(7),
     lastFed: new Date().toISOString(),
     loaves: []
@@ -99,8 +100,8 @@ test("defaultState has empty jar values", () => {
   const s = DS.defaultState()
   assert.equal(s.volume, 0)
   assert.equal(s.bubbles, 0)
-  assert.equal(s.darkness, 0)
-  assert.equal(s.baked, false)
+  assert.equal("darkness" in s, false)
+  assert.equal("baked" in s, false)
   assert.equal(s.lastFed, null)
   assert.ok(s.created)
 })
@@ -118,8 +119,8 @@ test("parseState round-trips valid JSON", () => {
   const s = DS.parseState(input)
   assert.equal(s.volume, 0.5)
   assert.equal(s.bubbles, 0.6)
-  assert.equal(s.darkness, 0.4)
-  assert.equal(s.baked, false)
+  assert.equal("darkness" in s, false)
+  assert.equal("baked" in s, false)
   assert.equal(s.feedWindowHour, 8)
   assert.equal(s.feedWindowMinutes, 510)
   assert.equal(s.loaves.length, 1)
@@ -130,27 +131,32 @@ test("parseState falls back to defaults on bad input", () => {
   for (const raw of ["", "{"]) {
     const s = DS.parseState(raw)
     assert.equal(s.volume, 0)
-    assert.equal(s.baked, false)
+    assert.equal("baked" in s, false)
   }
-  // "null" parses to null, returned as-is
-  assert.equal(DS.parseState("null"), null)
-  // "[]" and "42" survive JSON.parse but produce non-object/primitive results
-  // that are returned without default fields
-  assert.equal(typeof DS.parseState("42"), "number")
-  assert.ok(Array.isArray(DS.parseState("[]")))
+})
+
+// Every consumer dereferences the result immediately, so a state file holding a
+// bare value must reset the jar, not hand back something that cannot be read.
+test("parseState falls back to defaults on values that are not a state", () => {
+  for (const raw of ["null", "42", "[]", '"text"', "true"]) {
+    const s = DS.parseState(raw)
+    assert.equal(s.volume, 0, raw)
+    assert.equal(s.bubbles, 0, raw)
+    assert.ok(Array.isArray(s.loaves), raw)
+  }
 })
 
 test("parseState clamps out-of-range values", () => {
   const s = DS.parseState(JSON.stringify({ volume: 5, bubbles: -1, darkness: 99 }))
   assert.equal(s.volume, 1)
   assert.equal(s.bubbles, 0)
-  assert.equal(s.darkness, 1)
+  assert.equal("darkness" in s, false)
 })
 
 test("parseState coerces non-numeric fields", () => {
   const s = DS.parseState(JSON.stringify({ volume: "abc", baked: "yes" }))
   assert.equal(s.volume, 0)
-  assert.equal(s.baked, false)
+  assert.equal("baked" in s, false)
 })
 
 test("parseState drops leftover feedDays", () => {
@@ -165,7 +171,7 @@ test("parseState treats a legacy darkness death as dead even if bubbles remain",
     created: daysAgoIso(10)
   }))
   assert.equal(s.bubbles, 0)
-  assert.equal(s.darkness, 1)
+  assert.equal("darkness" in s, false)
   assert.equal(DS.isDead(s), true)
 })
 
@@ -184,7 +190,7 @@ test("parseState treats a legacy baked endgame as dead", () => {
     created: daysAgoIso(10)
   }))
   assert.equal(s.bubbles, 0)
-  assert.equal(s.baked, false)
+  assert.equal("baked" in s, false)
   assert.equal(DS.isDead(s), true)
 })
 
@@ -237,13 +243,13 @@ test("canFeed is false when already fed today", () => {
   assert.equal(DS.canFeed(s), false)
 })
 
-test("canFeed is true when not fed today and volume > 0", () => {
-  const s = makeState({ volume: 0.5, lastFed: null })
+test("canFeed is true for a live jar not fed today", () => {
+  const s = makeState({ volume: 0.5, bubbles: 0.5, lastFed: daysAgoIso(1) })
   assert.equal(DS.canFeed(s), true)
 })
 
 test("canFeed ignores baked flag", () => {
-  const s = makeState({ volume: 0.5, lastFed: null, baked: true })
+  const s = makeState({ volume: 0.5, bubbles: 0.5, lastFed: daysAgoIso(1), baked: true })
   assert.equal(DS.canFeed(s), true)
 })
 
@@ -269,16 +275,9 @@ test("canBake requires volume and enough bubbles, not age or streak", () => {
   assert.equal(DS.canBake(bakableState()), true)
 })
 
-test("showFeed stays true on a bakeable starter", () => {
-  const s = bakableState({ lastFed: daysAgoIso(1) })
-  assert.equal(DS.canBake(s), true)
-  assert.equal(DS.canFeed(s), true)
-  assert.equal(DS.showFeed(s), true)
-})
-
 test("feedButtonText names an out-of-window feed instead of blocking it", () => {
   const s = makeState(Object.assign({
-    volume: 0.5, lastFed: daysAgoIso(1)
+    volume: 0.5, bubbles: 0.5, lastFed: daysAgoIso(1)
   }, feedWindowOffset(150)))
   assert.equal(DS.canFeed(s), true)
   assert.equal(DS.inFeedWindow(s), false)
@@ -287,7 +286,7 @@ test("feedButtonText names an out-of-window feed instead of blocking it", () => 
 
 // ── feed ───────────────────────────────────────────────────
 
-test("a perfect feed on a mature starter raises health; darkness is 1 - health", () => {
+test("a perfect feed on a mature starter raises health", () => {
   const s = makeState(Object.assign({
     volume: 0.3, bubbles: 0.2, lastFed: null,
     created: daysAgoIso(7)
@@ -295,7 +294,6 @@ test("a perfect feed on a mature starter raises health; darkness is 1 - health",
   const next = DS.feed(s)
   assert.equal(next.volume, 0.42)
   almostEqual(next.bubbles, 0.35)
-  almostEqual(next.darkness, 0.65)
   assert.ok(next.lastFed)
 })
 
@@ -306,7 +304,6 @@ test("a moderate feed (±45m) on a mature starter applies half the health change
   }, feedWindowOffset(45)))
   const next = DS.feed(s)
   almostEqual(next.bubbles, 0.275)
-  almostEqual(next.darkness, 0.725)
 })
 
 test("a late feed (±90m) on a mature starter applies a quarter of the health change", () => {
@@ -316,7 +313,6 @@ test("a late feed (±90m) on a mature starter applies a quarter of the health ch
   }, feedWindowOffset(90)))
   const next = DS.feed(s)
   almostEqual(next.bubbles, 0.2375)
-  almostEqual(next.darkness, 0.7625)
 })
 
 test("feeding outside ±2h adds volume, keeps health, and moves the perfect window", () => {
@@ -327,7 +323,6 @@ test("feeding outside ±2h adds volume, keeps health, and moves the perfect wind
   const next = DS.feed(s)
   assert.equal(next.volume, 0.42)
   assert.equal(next.bubbles, 0.2)
-  almostEqual(next.darkness, 0.8)
   const now = new Date()
   const expected = now.getHours() * 60 + now.getMinutes()
   assert.ok(Math.abs(next.feedWindowMinutes - expected) <= 1)
@@ -340,7 +335,6 @@ test("a perfect feed on day 1 raises full health; display is 1/7 intensity", () 
   }, feedWindowOffset(0)))
   const next = DS.feed(s)
   almostEqual(next.bubbles, 0.65)
-  almostEqual(next.darkness, 0.35)
   almostEqual(DS.displayBubbles(next), 0.65 / 7)
   almostEqual(DS.displayDarkness(next), 0.35 / 7)
 })
@@ -354,14 +348,13 @@ test("feed clamps volume to 1", () => {
   assert.equal(next.volume, 1)
 })
 
-test("feed clamps health to 1 and darkness to 0", () => {
+test("feed clamps health to 1", () => {
   const s = makeState(Object.assign({
     volume: 0.5, bubbles: 0.95, lastFed: null,
     created: daysAgoIso(7)
   }, feedWindowOffset(0)))
   const next = DS.feed(s)
   assert.equal(next.bubbles, 1)
-  assert.equal(next.darkness, 0)
 })
 
 test("feed does not mutate the original state", () => {
@@ -378,12 +371,10 @@ test("feed returns the same reference when canFeed is false", () => {
 // ── startJar ───────────────────────────────────────────────
 
 test("startJar initializes a new starter at perfect health", () => {
-  const s = makeState({ volume: 0, darkness: 0.8 })
+  const s = makeState({ volume: 0 })
   const next = DS.startJar(s)
   assert.equal(next.volume, 0.1)
   assert.equal(next.bubbles, 1)
-  assert.equal(next.darkness, 0)
-  assert.equal(next.baked, false)
   almostEqual(DS.displayBubbles(next), 1 / 7)
   almostEqual(DS.displayDarkness(next), 0)
   assert.ok(next.created)
@@ -411,7 +402,6 @@ test("bake subtracts one daily dose from volume and logs loaf quality from healt
   const next = DS.bake(s)
   almostEqual(next.volume, 0.5 - DS.VOLUME_PER_FEED)
   assert.equal(next.bubbles, 0.5)
-  assert.equal(next.baked, false)
   assert.equal(next.loaves.length, 1)
   assert.equal(next.loaves[0].quality, 0.5)
   assert.ok(next.loaves[0].bakedAt)
@@ -444,7 +434,7 @@ test("feed after bake restores one daily dose", () => {
 
 // ── health / display / neglect ─────────────────────────────
 
-test("day-1 perfect health shows 1/7 bubbles and no darkness", () => {
+test("day-1 perfect health shows 1/7 bubbles and no crust", () => {
   const s = makeState({
     volume: 0.5, bubbles: 1, lastFed: new Date().toISOString(),
     created: new Date().toISOString()
@@ -506,28 +496,8 @@ test("a late feed after decay freezes health and does not restore it", () => {
   almostEqual(DS.health(next), before)
 })
 
-test("advanceDay does not apply a lump of neglect", () => {
-  const s = makeState({
-    volume: 0.5, bubbles: 0.6,
-    lastFed: new Date(Date.now() - 25 * HOUR).toISOString(),
-    created: daysAgoIso(10)
-  })
-  const next = DS.advanceDay(s)
-  assert.equal(next.bubbles, 0.6)
-})
 
-test("advanceDay skips when volume is 0", () => {
-  const s = makeState({ volume: 0, bubbles: 0.5 })
-  assert.equal(DS.advanceDay(s), s)
-})
 
-test("advanceDay returns the same object so callers skip persist", () => {
-  const s = makeState({
-    volume: 0.5, bubbles: 0.6,
-    lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
-  })
-  assert.equal(DS.advanceDay(s), s)
-})
 
 // ── isDead ─────────────────────────────────────────────────
 
@@ -559,9 +529,9 @@ test("aliveText is empty when volume is 0", () => {
   assert.equal(DS.aliveText(makeState()), "")
 })
 
-test("aliveText says 'started: today' on day 0", () => {
+test("aliveText says 'today' on day 0", () => {
   const s = makeState({ volume: 0.5, created: new Date().toISOString() })
-  assert.equal(DS.aliveText(s), "started: today")
+  assert.equal(DS.aliveText(s), "today")
 })
 
 test("aliveText says '1 day ago' on day 1", () => {
@@ -687,19 +657,16 @@ test("inFeedWindow: just over 2 hours away is outside", () => {
 
 // ── startJar (edge cases) ─────────────────────────────────
 
-test("startJar resets a previously baked starter", () => {
-  const s = makeState({ volume: 0.8, baked: true, darkness: 0.5 })
-  const next = DS.startJar(s)
-  assert.equal(next.baked, false)
+test("startJar restarts a full jar at one dose", () => {
+  const next = DS.startJar(makeState({ volume: 0.8 }))
   assert.equal(next.volume, 0.1)
-  assert.equal(next.darkness, 0)
+  assert.equal(DS.health(next), 1)
 })
 
-test("startJar resets a dead starter", () => {
-  const s = makeState({ volume: 0.5, darkness: 1.0 })
-  const next = DS.startJar(s)
-  assert.equal(next.darkness, 0)
-  assert.equal(next.baked, false)
+test("startJar brings a dead starter back to Alive", () => {
+  const s = makeState({ volume: 0.5, bubbles: 0 })
+  assert.equal(DS.lifecycle(s), "Dead")
+  assert.equal(DS.lifecycle(DS.startJar(s)), "Alive")
 })
 
 // ── bake (edge cases) ─────────────────────────────────────
@@ -713,7 +680,7 @@ test("canBake stays true after baking as long as volume and health remain", () =
 })
 
 test("bake does not consume a dead starter", () => {
-  const s = bakableState({ bubbles: 0, darkness: 1 })
+  const s = bakableState({ bubbles: 0 })
   assert.equal(DS.bake(s), s)
 })
 
@@ -726,7 +693,6 @@ test("two perfect feeds on a mature starter reach bakeable displayed bubbles", (
   s.lastFed = daysAgoIso(1)
   s = DS.feed(s)
   almostEqual(s.bubbles, 0.4)
-  almostEqual(s.darkness, 0.6)
   assert.equal(DS.canBake(s), true)
 })
 
@@ -864,4 +830,337 @@ test("doughColorComponents clamps at extremes", () => {
   assert.ok(c.r >= 0 && c.r <= 1)
   assert.ok(c.g >= 0 && c.g <= 1)
   assert.ok(c.b >= 0 && c.b <= 1)
+})
+
+// ── lifecycle ──────────────────────────────────────────────
+
+test("lifecycle: an empty jar is Empty", () => {
+  assert.equal(DS.lifecycle(makeState({ volume: 0, bubbles: 1 })), "Empty")
+})
+
+test("lifecycle: a jar with dough and health is Alive", () => {
+  assert.equal(DS.lifecycle(makeState({
+    volume: 0.5,
+    bubbles: 0.5,
+    lastFed: new Date().toISOString()
+  })), "Alive")
+})
+
+test("lifecycle: a jar with dough and no health is Dead", () => {
+  assert.equal(DS.lifecycle(makeState({
+    volume: 0.5,
+    bubbles: 0,
+    lastFed: new Date().toISOString()
+  })), "Dead")
+})
+
+test("lifecycle: an empty jar with no health is still Empty, not Dead", () => {
+  assert.equal(DS.lifecycle(makeState({ volume: 0, bubbles: 0 })), "Empty")
+})
+
+// ── feedCycle ──────────────────────────────────────────────
+
+test("feedCycle: fed today is Fed", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.8, lastFed: new Date().toISOString()
+  }, feedWindowOffset(0)))
+  assert.equal(DS.feedCycle(s), "Fed")
+})
+
+test("feedCycle: not fed today and inside the window is Due", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.8, lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
+  }, feedWindowOffset(0)))
+  assert.equal(DS.feedCycle(s), "Due")
+})
+
+test("feedCycle: past a day, outside the window, is Late", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.8, lastFed: new Date(Date.now() - 30 * HOUR).toISOString()
+  }, feedWindowOffset(300)))
+  assert.equal(DS.feedCycle(s), "Late")
+})
+
+test("feedCycle: within a day but outside the window is Rested", () => {
+  const endOfYesterday = new Date()
+  endOfYesterday.setHours(0, 0, 0, 0)
+  endOfYesterday.setMinutes(-1)
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.8, lastFed: endOfYesterday.toISOString()
+  }, feedWindowOffset(300)))
+  assert.equal(DS.feedCycle(s), "Rested")
+})
+
+test("feedCycle: an empty jar has no feed cycle", () => {
+  assert.equal(DS.feedCycle(makeState()), "None")
+})
+
+test("feedCycle: a dead jar has no feed cycle", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0, lastFed: new Date().toISOString()
+  }, feedWindowOffset(0)))
+  assert.equal(DS.feedCycle(s), "None")
+})
+
+// ── healthBand ─────────────────────────────────────────────
+
+test("healthBand: names the four bands at their boundaries", () => {
+  const band = (h) => DS.healthBand(makeState({
+    volume: 0.5, bubbles: h, lastFed: new Date().toISOString()
+  }))
+  assert.equal(band(1), "Happy")
+  assert.equal(band(0.7), "Happy")
+  assert.equal(band(0.69), "Sluggish")
+  assert.equal(band(0.4), "Sluggish")
+  assert.equal(band(0.39), "Tired")
+  assert.equal(band(0.2), "Tired")
+  assert.equal(band(0.19), "Failing")
+  assert.equal(band(0.01), "Failing")
+})
+
+test("healthBand: reads decayed health, not the stored bubbles", () => {
+  const s = makeState({
+    volume: 0.5,
+    bubbles: 0.75,
+    lastFed: new Date(Date.now() - 40 * HOUR).toISOString()
+  })
+  assert.ok(DS.health(s) < 0.7)
+  assert.equal(DS.healthBand(s), "Sluggish")
+})
+
+// ── statusText priority over the three machines ────────────
+
+test("statusText: Due outranks a failing health band", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0.1, lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
+  }, feedWindowOffset(0)))
+  assert.equal(DS.feedCycle(s), "Due")
+  assert.equal(DS.healthBand(s), "Failing")
+  assert.match(DS.statusText(s), /feeding time/)
+})
+
+test("statusText: Dead outranks Due", () => {
+  const s = makeState(Object.assign({
+    volume: 0.5, bubbles: 0, lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
+  }, feedWindowOffset(0)))
+  assert.equal(DS.lifecycle(s), "Dead")
+  assert.match(DS.statusText(s), /died/)
+})
+
+test("statusText: Empty outranks everything", () => {
+  const s = makeState(Object.assign({
+    volume: 0, bubbles: 0, lastFed: new Date(Date.now() - 25 * HOUR).toISOString()
+  }, feedWindowOffset(0)))
+  assert.equal(DS.lifecycle(s), "Empty")
+  assert.match(DS.statusText(s), /empty jar/)
+})
+
+test("statusText: Late reads hungry only in the Happy band", () => {
+  const late = (bubbles) => makeState(Object.assign({
+    volume: 0.5, bubbles: bubbles, lastFed: new Date(Date.now() - 30 * HOUR).toISOString()
+  }, feedWindowOffset(300)))
+  assert.equal(DS.feedCycle(late(0.9)), "Late")
+  assert.match(DS.statusText(late(0.9)), /hungry/)
+  assert.match(DS.statusText(late(0.5)), /sluggish/)
+})
+
+// ── one home for health ────────────────────────────────────
+
+test("persistFields omits darkness", () => {
+  const p = DS.persistFields(makeState({ volume: 0.5, bubbles: 0.4 }))
+  assert.equal("darkness" in p, false)
+  assert.equal(p.bubbles, 0.4)
+})
+
+test("writeHealth stores health in bubbles alone", () => {
+  const s = makeState()
+  DS.writeHealth(s, 0.35)
+  assert.equal(s.bubbles, 0.35)
+  assert.equal("darkness" in s, false)
+})
+
+test("a saved jar round-trips its health", () => {
+  const s = DS.startJar(DS.defaultState())
+  DS.writeHealth(s, 0.42)
+  const back = DS.parseState(JSON.stringify(DS.persistFields(s)))
+  almostEqual(DS.health(back), 0.42)
+  assert.equal(DS.lifecycle(back), "Alive")
+})
+
+test("a saved dead jar reloads dead without a darkness field", () => {
+  const s = DS.startJar(DS.defaultState())
+  DS.writeHealth(s, 0)
+  const back = DS.parseState(JSON.stringify(DS.persistFields(s)))
+  assert.equal(DS.lifecycle(back), "Dead")
+})
+
+// ── loafSummary ────────────────────────────────────────────
+
+function loaves(...qualities) {
+  return qualities.map((q) => ({ bakedAt: new Date().toISOString(), quality: q }))
+}
+
+test("loafSummary: no loaves yet", () => {
+  assert.equal(DS.loafSummary(makeState()), "none yet")
+  assert.equal(DS.loafSummary(makeState({ loaves: [] })), "none yet")
+})
+
+test("loafSummary: one loaf is singular", () => {
+  assert.equal(DS.loafSummary(makeState({ loaves: loaves(0.82) })), "1 loaf, avg quality 82%")
+})
+
+test("loafSummary: averages the qualities", () => {
+  const s = makeState({ loaves: loaves(1, 0.9, 0.8, 0.7, 0.7) })
+  assert.equal(DS.loafSummary(s), "5 loaves, avg quality 82%")
+})
+
+test("loafSummary: rounds the average to a whole percent", () => {
+  assert.equal(DS.loafSummary(makeState({ loaves: loaves(0.5, 0.334) })), "2 loaves, avg quality 42%")
+})
+
+test("loafSummary: a loaf saved without a quality is counted but not averaged", () => {
+  const s = makeState({ loaves: [{ bakedAt: new Date().toISOString() }, { quality: 0.6 }] })
+  assert.equal(DS.loafSummary(s), "2 loaves, avg quality 60%")
+})
+
+test("loafSummary: loaves that are all unrated report no average", () => {
+  const s = makeState({ loaves: [{ bakedAt: "x" }, { bakedAt: "y" }] })
+  assert.equal(DS.loafSummary(s), "2 loaves")
+})
+
+test("canFeed: a dead starter cannot be fed back to life", () => {
+  const s = neglectedJar(60, { bubbles: 0 })
+  assert.equal(DS.lifecycle(s), "Dead")
+  assert.equal(DS.canFeed(s), false)
+  assert.equal(DS.feed(s), s)
+})
+
+test("canFeed: an empty jar cannot be fed", () => {
+  assert.equal(DS.canFeed(makeState({ volume: 0 })), false)
+})
+
+test("nextFeedHint stays quiet when hooch, not the clock, blocks the feed", () => {
+  const s = neglectedJar(66, { volume: 0.6 })
+  assert.equal(DS.feedCycle(s), "Blocked")
+  assert.equal(DS.nextFeedHint(s), "")
+})
+
+// ── hooch and pour ─────────────────────────────────────────
+
+// Hooch accrues on the same clock as the decay, so a jar is described by how
+// long it has gone unfed.
+function neglectedJar(hoursUnfed, overrides = {}) {
+  return makeState(Object.assign({
+    volume: 0.5,
+    bubbles: 0.5,
+    created: daysAgoIso(10),
+    lastFed: new Date(Date.now() - hoursUnfed * HOUR).toISOString()
+  }, overrides))
+}
+
+test("hooch: a jar fed inside its window has thrown none", () => {
+  assert.equal(DS.hooch(neglectedJar(2)), 0)
+  assert.equal(DS.hooch(neglectedJar(26)), 0)
+})
+
+test("hooch: accrues once the feed is overdue", () => {
+  almostEqual(DS.hooch(neglectedJar(36)), 0.1)
+  almostEqual(DS.hooch(neglectedJar(46)), 0.2)
+})
+
+test("hooch: stops at the maximum", () => {
+  almostEqual(DS.hooch(neglectedJar(66)), DS.HOOCH_MAX)
+  almostEqual(DS.hooch(neglectedJar(500)), DS.HOOCH_MAX)
+})
+
+test("hooch: an empty jar throws none", () => {
+  assert.equal(DS.hooch(neglectedJar(100, { volume: 0 })), 0)
+})
+
+test("canPour: any hooch at all is worth pouring", () => {
+  assert.equal(DS.canPour(neglectedJar(30)), true)
+  assert.equal(DS.canPour(neglectedJar(66)), true)
+})
+
+test("canPour: nothing to pour before the feed is overdue", () => {
+  assert.equal(DS.canPour(neglectedJar(2)), false)
+})
+
+test("canPour: a dead starter is past pouring", () => {
+  const s = neglectedJar(100, { bubbles: 0 })
+  assert.equal(DS.lifecycle(s), "Dead")
+  assert.equal(DS.canPour(s), false)
+})
+
+test("pour empties the hooch and frees the room it took", () => {
+  const s = neglectedJar(66)
+  almostEqual(DS.hooch(s), DS.HOOCH_MAX)
+  const next = DS.pour(s)
+  assert.equal(DS.hooch(next), 0)
+})
+
+test("pour adds no health and no volume", () => {
+  const s = neglectedJar(40)
+  const next = DS.pour(s)
+  almostEqual(DS.health(next), DS.health(s))
+  assert.equal(next.volume, s.volume)
+})
+
+test("pour does not count as a feed", () => {
+  const s = neglectedJar(40)
+  const next = DS.pour(s)
+  assert.equal(next.lastFed, s.lastFed)
+  assert.equal(DS.fedToday(next), false)
+})
+
+test("pouring twice does nothing the second time", () => {
+  const once = DS.pour(neglectedJar(40))
+  assert.equal(DS.canPour(once), false)
+  assert.equal(DS.pour(once), once)
+})
+
+test("pour leaves a jar with no hooch alone", () => {
+  const s = neglectedJar(2)
+  assert.equal(DS.pour(s), s)
+})
+
+test("hooch keeps accruing after a pour, from the pour onwards", () => {
+  const s = DS.pour(neglectedJar(100))
+  s.pouredAt = new Date(Date.now() - 40 * HOUR).toISOString()
+  almostEqual(DS.hooch(s), 0.14)
+})
+
+// ── a jar full of hooch has no room to feed ────────────────
+
+test("hooch filling the last of the headroom blocks feeding", () => {
+  const s = neglectedJar(66, Object.assign({ volume: 0.6 }, feedWindowOffset(0)))
+  almostEqual(DS.hooch(s), 0.4)
+  assert.equal(DS.canFeed(s), false)
+})
+
+test("a full jar with no hooch is still feedable", () => {
+  const s = neglectedJar(25, Object.assign({ volume: 1 }, feedWindowOffset(0)))
+  assert.equal(DS.hooch(s), 0)
+  assert.equal(DS.canFeed(s), true)
+})
+
+test("pouring makes room to feed again", () => {
+  const s = neglectedJar(66, Object.assign({ volume: 0.6 }, feedWindowOffset(0)))
+  assert.equal(DS.canFeed(s), false)
+  assert.equal(DS.canFeed(DS.pour(s)), true)
+})
+
+test("feedCycle reports a jar it cannot feed as Blocked", () => {
+  const s = neglectedJar(66, { volume: 0.6 })
+  assert.equal(DS.feedCycle(s), "Blocked")
+})
+
+test("statusText asks you to remove the hooch when the jar is full", () => {
+  const s = neglectedJar(66, { volume: 0.6 })
+  assert.match(DS.statusText(s), /remove/)
+})
+
+test("pouredAt is saved", () => {
+  const s = DS.pour(neglectedJar(40))
+  assert.equal(DS.persistFields(s).pouredAt, s.pouredAt)
 })

@@ -7,10 +7,10 @@ import { loadLib } from "./loadLib.mjs"
 
 const DS = loadLib("./DoughState.js", [
   "defaultState", "parseState", "persistFields",
-  "canFeed", "canStart", "canBake", "isDead",
-  "feed", "startJar", "bake",
+  "canFeed", "canStart", "canBake", "canPour", "isDead",
+  "feed", "startJar", "bake", "pour",
   "statusText", "aliveText", "feedButtonText",
-  "health", "displayBubbles", "displayDarkness"
+  "health", "displayBubbles", "hooch", "jarFull", "loafSummary"
 ])
 
 const STATE_PATH = join(homedir(), ".config", "omadough", "state.json")
@@ -24,6 +24,7 @@ Usage:
   omadough status       show status
   omadough feed         feed (once per day)
   omadough start        start a new jar (empty or dead)
+  omadough remove       remove the hooch to make room
   omadough bake         bake a loaf if the starter is ready
   omadough help         this text
 
@@ -64,10 +65,10 @@ function formatStatus(state) {
   if (age) lines.push(`started ${age}`)
   if (state.volume > 0) {
     lines.push(
-      `volume ${pct(state.volume)}  bubbles ${pct(DS.displayBubbles(state))}  health ${pct(DS.health(state))}`
+      `volume ${pct(state.volume)}  hooch ${pct(DS.hooch(state))}  bubbles ${pct(DS.displayBubbles(state))}  health ${pct(DS.health(state))}`
     )
     if (Array.isArray(state.loaves) && state.loaves.length)
-      lines.push(`${state.loaves.length} ${state.loaves.length === 1 ? "loaf" : "loaves"} baked`)
+      lines.push(`baked ${DS.loafSummary(state)}`)
   }
   return lines.join("\n")
 }
@@ -95,6 +96,8 @@ if (cmd === "feed") {
     fail("Jar is empty. Run: omadough start")
   if (DS.isDead(state))
     fail("Starter is dead. Run: omadough start")
+  if (DS.jarFull(state))
+    fail("No room — the jar is full of hooch. Run: omadough remove")
   if (!DS.canFeed(state))
     fail(DS.feedButtonText(state))
   state = DS.feed(state)
@@ -109,6 +112,15 @@ if (cmd === "start") {
   state = DS.startJar(state)
   saveState(state)
   process.stdout.write("Started.\n" + formatStatus(state) + "\n")
+  process.exit(0)
+}
+
+if (cmd === "remove" || cmd === "pour") {
+  if (!DS.canPour(state))
+    fail("No hooch to remove.")
+  state = DS.pour(state)
+  saveState(state)
+  process.stdout.write("Removed the hooch.\n" + formatStatus(state) + "\n")
   process.exit(0)
 }
 

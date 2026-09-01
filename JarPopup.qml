@@ -25,6 +25,7 @@ PanelWindow {
   property string aliveMsg: ""
   property bool feedable: false
   property bool bakeable: false
+  property bool pourable: false
   property bool startable: false
   property bool dead: false
 
@@ -32,6 +33,7 @@ PanelWindow {
   signal feedRequested()
   signal startRequested()
   signal bakeRequested()
+  signal pourRequested()
 
   readonly property var anchorWindow: anchorItem ? anchorItem.QsWindow.window : null
   readonly property string barPos: bar ? bar.position : "top"
@@ -142,8 +144,7 @@ PanelWindow {
           anchors.verticalCenter: parent.verticalCenter
           volume: root.doughState.volume || 0
           bubbles: { root.clock; return DoughState.displayBubbles(root.doughState) }
-          darkness: { root.clock; return DoughState.displayDarkness(root.doughState) }
-          baked: root.doughState.baked || false
+          hooch: { root.clock; return DoughState.hooch(root.doughState) }
           doughColor: {
             root.clock
             var c = DoughState.doughColorComponents(root.doughState)
@@ -257,11 +258,7 @@ PanelWindow {
               Layout.row: 3
               Layout.column: 1
               Layout.fillWidth: true
-              text: {
-                var n = (root.doughState.loaves && root.doughState.loaves.length) || 0
-                if (n === 1) return "1 loaf"
-                return n + " loaves"
-              }
+              text: DoughState.loafSummary(root.doughState)
               color: Qt.darker(Color.foreground, 1.5)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -300,7 +297,9 @@ PanelWindow {
 
             Column {
               spacing: Style.space(4)
-              visible: DoughState.showFeed(root.doughState)
+              // Collapse the slot entirely when neither the button nor the hint
+              // has anything to say, so the Flow does not wrap around a gap.
+              visible: root.feedable || feedHint.text.length > 0
 
               Rectangle {
                 width: feedLabel.implicitWidth + Style.space(24)
@@ -329,6 +328,7 @@ PanelWindow {
               }
 
               Text {
+                id: feedHint
                 width: Math.min(sideCol.width, implicitWidth)
                 wrapMode: Text.WordWrap
                 text: DoughState.nextFeedHint(root.doughState)
@@ -336,6 +336,32 @@ PanelWindow {
                 color: Qt.darker(Color.foreground, 1.5)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
+              }
+            }
+
+            Rectangle {
+              width: pourLabel.implicitWidth + Style.space(24)
+              height: 36
+              radius: Style.cornerRadius
+              color: Color.accent
+              visible: root.pourable
+              opacity: pourMouse.containsMouse ? 0.85 : 1
+
+              Text {
+                id: pourLabel
+                anchors.centerIn: parent
+                text: "remove hooch"
+                color: Color.background
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              MouseArea {
+                id: pourMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.pourRequested()
               }
             }
 

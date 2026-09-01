@@ -113,18 +113,11 @@ Panel {
   }
 
   Timer {
-    id: dayCheckTimer
+    id: refreshTimer
     interval: 300000
     running: true
     repeat: true
-    property string lastDay: ""
-    onTriggered: {
-      var today = DoughState.todayKey()
-      if (lastDay !== "" && lastDay !== today)
-        root.mutate(DoughState.advanceDay)
-      lastDay = today
-      root.refreshStatus()
-    }
+    onTriggered: root.refreshStatus()
   }
 
   Process {
@@ -188,8 +181,7 @@ Panel {
         anchors.fill: parent
         volume: root.dough.volume
         bubbles: { root.clock; return DoughState.displayBubbles(root.dough) }
-        darkness: { root.clock; return DoughState.displayDarkness(root.dough) }
-        baked: root.dough.baked
+        hooch: { root.clock; return DoughState.hooch(root.dough) }
         rimColor: root.themeAccent
         doughColor: {
           root.clock
@@ -220,11 +212,13 @@ Panel {
     aliveMsg: DoughState.aliveText(root.dough)
     feedable: DoughState.canFeed(root.dough)
     bakeable: DoughState.canBake(root.dough)
+    pourable: DoughState.canPour(root.dough)
     startable: DoughState.canStart(root.dough)
     dead: DoughState.isDead(root.dough)
     onCloseRequested: root.close()
     onFeedRequested: root.mutate(DoughState.feed)
     onBakeRequested: root.mutate(DoughState.bake)
+    onPourRequested: root.mutate(DoughState.pour)
     // startJar has no guard of its own, so re-check against the state on disk.
     onStartRequested: root.mutate(function(state) {
       return DoughState.canStart(state) || DoughState.isDead(state)

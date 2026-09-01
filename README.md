@@ -4,6 +4,8 @@ A time-realistic sourdough starter that lives in your [Omarchy](https://github.c
 
 Feed it every day around the same time, watch the jar fill up and bubble when it's healthy. How much bread can you bake?
 
+Algorithm devised by my wife.
+
 ## Install
 
 ```bash
@@ -22,8 +24,9 @@ omarchy plugin enable vdsabev.omadough
 
 - Start your sourdough.
 - Feed once per day around the same time to maintain optimal health.
+- A starved starter produces **hooch**, a dark liquid that settles on top of the dough.
 - Neglect your sourdough for too long and it may die!
-- Bake once the dough ripens and is in good health. Baking takes out some of the volume.
+- Bake bread once the dough ripens and is in good health. Baking takes out some of the volume.
 - If you use up all the dough or it dies you have to start a new one!
 
 You can also feed your jar from the terminal. After installing the plugin:
@@ -33,16 +36,33 @@ ln -sfn ~/.config/omarchy/plugins/vdsabev.omadough/bin/omadough ~/.local/bin/oma
 ```
 
 ```bash
-omadough           # status (volume, bubbles, health, loaf count)
+omadough           # status (volume, hooch, bubbles, health, loaves)
 omadough start     # when empty or dead
 omadough feed
+omadough remove    # remove the hooch to make room
 omadough bake
 omadough help
 ```
 
-State lives in `~/.config/omadough/state.json`. The bar re-reads it when you open the popup, hourly, and before every action it takes, so CLI and widget share one culture.
+State lives in `~/.config/omadough/state.json`. The bar re-reads it when you open the popup, hourly, and before every action it takes, so CLI and widget share one culture. Culture - get it? 🤓
 
-## Remove
+## Simulator
+
+Travel in time to simulate different states of the starter. `sim.mjs` draws the same sprite the widget does in a console, animated, in half-block colour, on a throwaway jar of its own — it never touches your actual starter.
+
+```bash
+node sim.mjs            # interactive
+node sim.mjs grid       # every volume against every health, side by side
+node sim.mjs ascii      # one frame, no colour
+```
+
+```
+s start   f feed   b bake   p remove hooch   r reset
+n/N day ±   t/T hour ±
+h/H health ±   v/V volume ±
+```
+
+## Uninstall
 
 ```bash
 omarchy plugin disable vdsabev.omadough
@@ -59,12 +79,12 @@ rm ~/.local/bin/omadough
 
 - Omarchy Quattro (`omarchy-shell` / Quickshell)
 - `python3` — the widget and the CLI both read and write the state file through `bin/omadough-state`
-- `node` — required for `omadough` on the console / SSH
+- `node` — required for `omadough` on the console
 
 ## Tests
 
 ```bash
-node --test DoughState.test.mjs
+node --test
 ```
 
 # TODO
