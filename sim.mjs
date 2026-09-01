@@ -22,6 +22,7 @@ const DS = loadLib("./DoughState.js", [
   "canFeed", "canBake", "canStart", "canPour", "pour", "isDead", "fedToday", "inFeedWindow",
   "health", "healthBand", "lifecycle", "feedCycle", "displayBubbles",
   "displayDarkness", "hooch", "jarFull", "hoursOverdue", "daysSince", "loafSummary",
+  "minutesUntilFeed", "reminderDue", "setReminders", "feedQuality",
   "statusText", "nextFeedHint", "ripenessLabel", "doughColorComponents",
   "VOLUME_PER_FEED", "DEVELOPMENT_DAYS"
 ])
@@ -108,6 +109,7 @@ function readout(state) {
     `hooch      ${pct(DS.hooch(state))}   rows ${geom.hoochRows}`,
     `ripeness   ${DS.ripenessLabel(state) || "7/7"}  day ${DS.daysSince(state.created)}`,
     `loaves     ${DS.loafSummary(state)}`,
+    `reminder   ${state.remindersEnabled === false ? "off" : DS.reminderDue(state) ? "due" : "in " + DS.minutesUntilFeed(state) + "m"}   quality ${DS.feedQuality(state)}`,
     "",
     `feed ${DS.canFeed(state) ? "yes" : "no "}   bake ${DS.canBake(state) ? "yes" : "no "}   pour ${DS.canPour(state) ? "yes" : "no "}   start ${DS.canStart(state) ? "yes" : "no "}`,
     "",
@@ -187,7 +189,7 @@ function asciiMode() {
 // ── Interactive mode ──────────────────────────────────────────────────────────
 
 const HELP = [
-  "s start   f feed   b bake   p remove hooch   r reset",
+  "s start   f feed   b bake   p remove hooch   m reminder   r reset",
   "n/N day ±   t/T hour ±",
   "h/H health ±   v/V volume ±",
   "space pause   q quit"
@@ -218,6 +220,7 @@ function interactive() {
       case "f": state = DS.feed(state); break
       case "b": state = DS.bake(state); break
       case "p": state = DS.pour(state); break
+      case "m": state = DS.setReminders(state, state.remindersEnabled === false); break
       case "r": state = DS.startJar(DS.defaultState()); skewMs = 0; break
       case "n": skewMs += 86400000; break
       case "N": skewMs -= 86400000; break

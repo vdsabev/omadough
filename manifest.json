@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "vdsabev.omadough",
   "name": "Omadough",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "vdsabev",
   "description": "A time-realistic sourdough starter that lives in your Omarchy bar.",
   "kinds": ["bar-widget"],

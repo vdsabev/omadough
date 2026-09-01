@@ -13,7 +13,9 @@ const DS = loadLib("./DoughState.js", [
   "formatFeedClock", "nextFeedHint",
   "health", "displayBubbles", "displayDarkness", "persistFields",
   "lifecycle", "feedCycle", "healthBand", "writeHealth", "loafSummary",
-  "hooch", "jarFull", "HOOCH_MAX"
+  "hooch", "jarFull", "HOOCH_MAX",
+  "feedQuality", "minutesUntilFeed", "reminderDue", "markReminded", "setReminders",
+  "FEED_PERFECT_MINUTES", "REMINDER_LEAD_MINUTES"
 ])
 
 const DAY = 86400000
@@ -1163,4 +1165,118 @@ test("statusText asks you to remove the hooch when the jar is full", () => {
 test("pouredAt is saved", () => {
   const s = DS.pour(neglectedJar(40))
   assert.equal(DS.persistFields(s).pouredAt, s.pouredAt)
+})
+
+// ── the feeding reminder ───────────────────────────────────
+
+// The reminder fires when the top-quality band opens, so a jar fed at the
+// notification gains the whole of BUBBLES_PER_FEED.
+function remindableJar(minutesUntilTarget, overrides = {}) {
+  return neglectedJar(25, Object.assign(feedWindowOffset(-minutesUntilTarget), overrides))
+}
+
+test("the lead time is the width of the top-quality band", () => {
+  assert.equal(DS.REMINDER_LEAD_MINUTES, DS.FEED_PERFECT_MINUTES)
+})
+
+test("a feed at the lead time still scores full quality", () => {
+  assert.equal(DS.feedQuality(remindableJar(DS.REMINDER_LEAD_MINUTES)), 1)
+})
+
+test("a feed one minute earlier does not", () => {
+  assert.ok(DS.feedQuality(remindableJar(DS.REMINDER_LEAD_MINUTES + 1)) < 1)
+})
+
+test("minutesUntilFeed counts forward to the next feeding time", () => {
+  assert.equal(DS.minutesUntilFeed(remindableJar(45)), 45)
+  assert.equal(DS.minutesUntilFeed(remindableJar(0)), 0)
+})
+
+test("minutesUntilFeed wraps to tomorrow once the time has passed", () => {
+  assert.equal(DS.minutesUntilFeed(remindableJar(-10)), 1430)
+})
+
+test("no reminder before the band opens", () => {
+  assert.equal(DS.reminderDue(remindableJar(DS.REMINDER_LEAD_MINUTES + 1)), false)
+})
+
+test("a reminder from the moment the band opens until the feeding time", () => {
+  assert.equal(DS.reminderDue(remindableJar(DS.REMINDER_LEAD_MINUTES)), true)
+  assert.equal(DS.reminderDue(remindableJar(1)), true)
+  assert.equal(DS.reminderDue(remindableJar(0)), true)
+})
+
+// A missed reminder is not repeated: the band it announced has closed.
+test("no reminder once the feeding time has passed", () => {
+  assert.equal(DS.reminderDue(remindableJar(-1)), false)
+})
+
+test("no reminder for a jar that cannot be fed", () => {
+  assert.equal(DS.reminderDue(remindableJar(10, { lastFed: new Date().toISOString() })), false)
+  assert.equal(DS.reminderDue(remindableJar(10, { volume: 0 })), false)
+  assert.equal(DS.reminderDue(remindableJar(10, { bubbles: 0 })), false)
+})
+
+test("no reminder when the jar is full of hooch", () => {
+  const s = neglectedJar(66, Object.assign({ volume: 0.6 }, feedWindowOffset(-10)))
+  assert.equal(DS.reminderDue(s), false)
+})
+
+test("no reminder when reminders are switched off", () => {
+  assert.equal(DS.reminderDue(DS.setReminders(remindableJar(10), false)), false)
+})
+
+test("switching reminders back on restores them", () => {
+  const s = DS.setReminders(DS.setReminders(remindableJar(10), false), true)
+  assert.equal(DS.reminderDue(s), true)
+})
+
+test("a jar reminds you once, not every minute", () => {
+  const s = DS.markReminded(remindableJar(20))
+  assert.equal(DS.reminderDue(s), false)
+})
+
+test("marking a reminder is not a feed", () => {
+  const before = remindableJar(20)
+  const after = DS.markReminded(before)
+  assert.equal(after.lastFed, before.lastFed)
+  assert.equal(after.volume, before.volume)
+  assert.equal(DS.health(after), DS.health(before))
+  assert.equal(DS.canFeed(after), true)
+})
+
+test("yesterday's reminder does not silence today's", () => {
+  const s = remindableJar(20, { remindedAt: daysAgoIso(1) })
+  assert.equal(DS.reminderDue(s), true)
+})
+
+test("reminders are on for a new jar", () => {
+  assert.equal(DS.defaultState().remindersEnabled, true)
+})
+
+test("the reminder settings are saved", () => {
+  const s = DS.markReminded(DS.setReminders(remindableJar(20), false))
+  const saved = DS.persistFields(s)
+  assert.equal(saved.remindersEnabled, false)
+  assert.equal(saved.remindedAt, s.remindedAt)
+})
+
+test("a save written before reminders existed still gets them", () => {
+  const s = DS.parseState(JSON.stringify({ volume: 0.5, bubbles: 0.5 }))
+  assert.equal(s.remindersEnabled, true)
+  assert.equal(s.remindedAt, null)
+})
+
+test("reminders stay off across a save", () => {
+  const s = DS.parseState(JSON.stringify(DS.persistFields(DS.setReminders(remindableJar(20), false))))
+  assert.equal(s.remindersEnabled, false)
+})
+
+// The guarantee the reminder makes: it never calls you to a feed worth less
+// than the full amount.
+test("every minute the reminder can fire is a full-quality minute", () => {
+  for (let lead = 0; lead <= 120; lead++) {
+    const s = remindableJar(lead)
+    if (DS.reminderDue(s)) assert.equal(DS.feedQuality(s), 1, `lead ${lead}`)
+  }
 })

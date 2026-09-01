@@ -17,6 +17,9 @@ var HEALTH_TIRED = 0.2
 // clock as the decay and takes up room in the jar.
 var HOOCH_PER_HOUR = 0.01
 var HOOCH_MAX = 0.4
+// The reminder opens the top-quality band rather than announcing its middle, so
+// a feed at the notification still scores full quality.
+var REMINDER_LEAD_MINUTES = FEED_PERFECT_MINUTES
 
 function defaultState() {
   var now = new Date()
@@ -28,6 +31,8 @@ function defaultState() {
     feedWindowHour: now.getHours(),
     feedWindowMinutes: now.getHours() * 60 + now.getMinutes(),
     pouredAt: null,
+    remindersEnabled: true,
+    remindedAt: null,
     loaves: []
   }
 }
@@ -41,6 +46,8 @@ function persistFields(state) {
     feedWindowHour: state.feedWindowHour,
     feedWindowMinutes: state.feedWindowMinutes,
     pouredAt: state.pouredAt || null,
+    remindersEnabled: state.remindersEnabled !== false,
+    remindedAt: state.remindedAt || null,
     loaves: state.loaves || []
   }
 }
@@ -59,6 +66,8 @@ function parseState(raw) {
   if (s.created) s.created = String(s.created)
   if (s.lastFed) s.lastFed = String(s.lastFed)
   s.pouredAt = s.pouredAt ? String(s.pouredAt) : null
+  s.remindersEnabled = s.remindersEnabled !== false
+  s.remindedAt = s.remindedAt ? String(s.remindedAt) : null
   s.volume = clamp(Number(s.volume) || 0, 0, 1)
   s.bubbles = clamp(Number(s.bubbles) || 0, 0, 1)
   // Saves written before health lived in `bubbles` alone recorded death as a full
@@ -255,6 +264,40 @@ function nextFeedHint(state) {
   var t = formatFeedClock(state)
   if (cycle === "Fed") return "feed again tomorrow around " + t
   return "around " + t
+}
+
+// ── Reminder ──────────────────────────────────────────────────────────────────
+// Due from the moment the top-quality band opens until the feeding time itself.
+// A missed reminder is not repeated: the band it announced has closed.
+
+function minutesUntilFeed(state) {
+  var diff = (windowMinutes(state) - minutesFromMidnight(new Date())) % 1440
+  return diff < 0 ? diff + 1440 : diff
+}
+
+function reminderDue(state) {
+  if (state.remindersEnabled === false) return false
+  if (!canFeed(state)) return false
+  // Anything newer than the lead time was posted for this same band.
+  if (state.remindedAt && hoursSince(state.remindedAt) * 60 <= REMINDER_LEAD_MINUTES)
+    return false
+  return minutesUntilFeed(state) <= REMINDER_LEAD_MINUTES
+}
+
+function reminderText(state) {
+  return "🍞 feed your sourdough now for the best health - due at " + formatFeedClock(state)
+}
+
+function markReminded(state) {
+  state = JSON.parse(JSON.stringify(state))
+  state.remindedAt = new Date().toISOString()
+  return state
+}
+
+function setReminders(state, on) {
+  state = JSON.parse(JSON.stringify(state))
+  state.remindersEnabled = !!on
+  return state
 }
 
 function feed(state) {

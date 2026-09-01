@@ -25,6 +25,7 @@ omarchy plugin enable vdsabev.omadough
 - Start your sourdough.
 - Feed once per day around the same time to maintain optimal health.
 - A starved starter produces **hooch**, a dark liquid that settles on top of the dough.
+- A reminder 30 minutes before feeding time, when the window for a perfect feed opens. Switch it off in the popup.
 - Neglect your sourdough for too long and it may die!
 - Bake bread once the dough ripens and is in good health. Baking takes out some of the volume.
 - If you use up all the dough or it dies you have to start a new one!
@@ -57,7 +58,7 @@ node sim.mjs ascii      # one frame, no colour
 ```
 
 ```
-s start   f feed   b bake   p remove hooch   r reset
+s start   f feed   b bake   p remove hooch   m reminder   r reset
 n/N day ±   t/T hour ±
 h/H health ±   v/V volume ±
 ```
@@ -80,6 +81,7 @@ rm ~/.local/bin/omadough
 - Omarchy Quattro (`omarchy-shell` / Quickshell)
 - `python3` — the widget and the CLI both read and write the state file through `bin/omadough-state`
 - `node` — required for `omadough` on the console
+- `notify-send` (libnotify) — required for the feeding reminder
 
 ## Tests
 
@@ -88,11 +90,6 @@ node --test
 ```
 
 # TODO
-
-## Feeding Reminder
-
-- Reminds you at the perfect time to feed your sourdough
-- Can be turned off from within the popup
 
 ## Vacation Mode
 

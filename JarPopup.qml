@@ -28,7 +28,9 @@ PanelWindow {
   property bool pourable: false
   property bool startable: false
   property bool dead: false
+  property bool remindersOn: true
 
+  signal remindersToggled()
   signal closeRequested()
   signal feedRequested()
   signal startRequested()
@@ -389,6 +391,22 @@ PanelWindow {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.bakeRequested()
               }
+            }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.doughState.volume > 0 && !root.dead
+            text: root.remindersOn ? "🔔 reminder on" : "🔕 reminder off"
+            color: Qt.darker(Color.foreground, 1.5)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.remindersToggled()
             }
           }
 

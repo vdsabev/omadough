@@ -98,7 +98,25 @@ Panel {
     onTriggered: {
       root.clock++
       root.refreshStatus()
+      root.checkReminder()
     }
+  }
+
+  Process {
+    id: notifyProc
+  }
+
+  // The view can be an hour old, so the notification is posted from inside the
+  // mutation, where the state has just been read back from disk.
+  function checkReminder() {
+    if (!DoughState.reminderDue(root.dough))
+      return
+    root.mutate(function(state) {
+      if (!DoughState.reminderDue(state))
+        return state
+      notifyProc.exec(["notify-send", "-a", "Omadough", "Omadough", DoughState.reminderText(state)])
+      return DoughState.markReminded(state)
+    })
   }
 
   // Catches edits made by the CLI. Volume and health move by fractions of a
@@ -215,7 +233,11 @@ Panel {
     pourable: DoughState.canPour(root.dough)
     startable: DoughState.canStart(root.dough)
     dead: DoughState.isDead(root.dough)
+    remindersOn: root.dough.remindersEnabled !== false
     onCloseRequested: root.close()
+    onRemindersToggled: root.mutate(function(state) {
+      return DoughState.setReminders(state, state.remindersEnabled === false)
+    })
     onFeedRequested: root.mutate(DoughState.feed)
     onBakeRequested: root.mutate(DoughState.bake)
     onPourRequested: root.mutate(DoughState.pour)
